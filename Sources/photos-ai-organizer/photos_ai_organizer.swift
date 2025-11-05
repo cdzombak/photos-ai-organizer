@@ -724,8 +724,8 @@ final class TravelClusterAnalyzer {
     private let config: PostgresConfig
     private let mapboxConfig: MapboxConfig?
     private let calendar = Calendar(identifier: .gregorian)
-    private let baselineWindowMonths = 8
-    private let baselineStepMonths = 4
+    private let baselineWindowMonths = 2
+    private let baselineStepMonths = 2
     private let travelDistanceThresholdMeters = 50_000.0
     private let clusterMergeDistanceMeters = 200_000.0
     private let binSizeMeters = 5_000.0
@@ -822,10 +822,11 @@ final class TravelClusterAnalyzer {
         while anchorStart <= finalAnchor {
             guard
                 let baselineWindowStart = calendar.date(byAdding: .month, value: -baselineWindowMonths, to: anchorStart),
+                let baselineWindowEnd = calendar.date(byAdding: .month, value: baselineWindowMonths, to: anchorStart),
                 let segmentEnd = calendar.date(byAdding: .month, value: baselineStepMonths, to: anchorStart)
             else { break }
 
-            let windowSamples = samples.filter { $0.date >= baselineWindowStart && $0.date < anchorStart }
+            let windowSamples = samples.filter { $0.date >= baselineWindowStart && $0.date < baselineWindowEnd }
             if windowSamples.isEmpty {
                 anchorStart = segmentEnd
                 continue
