@@ -12,11 +12,11 @@ public struct TravelPipelineSettings {
     public let awayTolerance: Double
 
     public init(
-        baselineWindowMonths: Int = 2,
+        baselineWindowMonths: Int = 4,
         baselineStepMonths: Int = 2,
-        travelDistanceThresholdMeters: Double = 50_000.0,
+        travelDistanceThresholdMeters: Double = 60_000.0,
         clusterMergeDistanceMeters: Double = 200_000.0,
-        binSizeMeters: Double = 5_000.0,
+        binSizeMeters: Double = 10_000.0,
         minimumPhotosPerCluster: Int = 5,
         minimumTravelDays: Int = 2,
         awayTolerance: Double = 0.95
