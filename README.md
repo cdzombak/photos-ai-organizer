@@ -52,14 +52,14 @@ Future support for thematic analysis is planned, to help you collect your best p
 - establish face baseline
 - cluster high numbers of atypical face appearances over 2-day windows
 
-### travel pipeline (temporal)
-
-- future: only import non-geotagged photos _with faces_ if they include one of the faces from geotagged photos; remove unknown-face from existing albums
-
-#### required support: face DB (temporal)
+#### required support: face DB
 
 - face (re)recognition
 - web UI for naming and merging
+
+### travel pipeline (temporal)
+
+- future: only import non-geotagged photos _with faces_ if they include one of the faces from geotagged photos; remove unknown-face from existing albums
 
 ### holiday pipeline (temporal)
 
