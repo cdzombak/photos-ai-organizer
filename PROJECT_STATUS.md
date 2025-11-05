@@ -29,3 +29,4 @@ Last Updated: $(date -u +"%Y-%m-%d %H:%M:%SZ")
 - Country-level clusters now pick start/end dates from their own photos, so multi-country trips produce distinct windows per country.
 - Cluster centroid and counts now track geo-only and total photos separately.
 - Non-geotagged photo inclusion uses a single prepared statement per run for efficiency.
+- Cluster windows now mirror the min/max timestamps of their own photos instead of the broader "away" window, so country trips reflect only the time spent in that area.

@@ -878,9 +878,12 @@ final class TravelClusterAnalyzer {
             guard sampleGroup.count >= minimumPhotosPerCluster else { continue }
             let center = centroid(of: sampleGroup)
             let medianDistance = medianDistanceMeters(of: sampleGroup, center: center)
+            let sampleDates = sampleGroup.map(\.date)
+            let start = sampleDates.min() ?? window.startDate
+            let end = sampleDates.max().flatMap { calendar.date(byAdding: .day, value: 1, to: $0) } ?? window.endDate
             clusters.append(TravelCluster(
-                windowStart: window.startDate,
-                windowEnd: window.endDate,
+                windowStart: start,
+                windowEnd: end,
                 centroid: center,
                 photoCount: sampleGroup.count,
                 geoPhotoCount: sampleGroup.count,
