@@ -2,6 +2,15 @@ import Foundation
 import PostgresClientKit
 
 public final class ImageGradeStore {
+    private static let gradeableUTIs = [
+        "public.jpeg",
+        "public.heic",
+        "public.heif",
+        "public.camera-raw-image",
+        "com.apple.raw-image",
+        "com.adobe.raw-image",
+        "public.dng"
+    ]
     private let config: PostgresConfig
 
     public init(config: PostgresConfig) {
@@ -39,7 +48,7 @@ public final class ImageGradeStore {
             guard
                 let assetID = try resolved.columns[0].optionalString(),
                 let uti = try resolved.columns[1].optionalString(),
-                PhotoAssetStore.allowedUngradedUTIs.contains(where: { $0.caseInsensitiveCompare(uti) == .orderedSame })
+                ImageGradeStore.gradeableUTIs.contains(where: { $0.caseInsensitiveCompare(uti) == .orderedSame })
             else { continue }
             ids.append(assetID)
         }
