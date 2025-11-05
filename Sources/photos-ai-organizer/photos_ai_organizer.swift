@@ -575,9 +575,11 @@ struct TravelCluster {
     let countryCode: String?
     let countryName: String?
     let baselineCountryCode: String?
+    let baselineRegionName: String?
     let clusterID: String?
     let assetIDs: [String]
     let windowID: Int
+    let isCountryAggregate: Bool
 
     func withLocationInfo(description: String?, countryCode: String?, countryName: String?) -> TravelCluster {
         TravelCluster(
@@ -591,9 +593,11 @@ struct TravelCluster {
             countryCode: countryCode,
             countryName: countryName,
             baselineCountryCode: baselineCountryCode,
+            baselineRegionName: baselineRegionName,
             clusterID: clusterID,
             assetIDs: assetIDs,
-            windowID: windowID
+            windowID: windowID,
+            isCountryAggregate: isCountryAggregate
         )
     }
 
@@ -609,9 +613,11 @@ struct TravelCluster {
             countryCode: countryCode,
             countryName: countryName,
             baselineCountryCode: baselineCode,
+            baselineRegionName: baselineRegionName,
             clusterID: clusterID,
             assetIDs: assetIDs,
-            windowID: windowID
+            windowID: windowID,
+            isCountryAggregate: isCountryAggregate
         )
     }
 
@@ -627,9 +633,11 @@ struct TravelCluster {
             countryCode: countryCode,
             countryName: countryName,
             baselineCountryCode: baselineCountryCode,
+            baselineRegionName: baselineRegionName,
             clusterID: id,
             assetIDs: assetIDs,
-            windowID: windowID
+            windowID: windowID,
+            isCountryAggregate: isCountryAggregate
         )
     }
 
@@ -645,9 +653,51 @@ struct TravelCluster {
             countryCode: countryCode,
             countryName: countryName,
             baselineCountryCode: baselineCountryCode,
+            baselineRegionName: baselineRegionName,
             clusterID: clusterID,
             assetIDs: assets,
-            windowID: windowID
+            windowID: windowID,
+            isCountryAggregate: isCountryAggregate
+        )
+    }
+
+    func withBaselineRegion(_ region: String?) -> TravelCluster {
+        TravelCluster(
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            centroid: centroid,
+            photoCount: photoCount,
+            geoPhotoCount: geoPhotoCount,
+            medianDistanceMeters: medianDistanceMeters,
+            locationDescription: locationDescription,
+            countryCode: countryCode,
+            countryName: countryName,
+            baselineCountryCode: baselineCountryCode,
+            baselineRegionName: region,
+            clusterID: clusterID,
+            assetIDs: assetIDs,
+            windowID: windowID,
+            isCountryAggregate: isCountryAggregate
+        )
+    }
+
+    func asCountryAggregate() -> TravelCluster {
+        TravelCluster(
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            centroid: centroid,
+            photoCount: photoCount,
+            geoPhotoCount: geoPhotoCount,
+            medianDistanceMeters: medianDistanceMeters,
+            locationDescription: countryName ?? locationDescription,
+            countryCode: countryCode,
+            countryName: countryName,
+            baselineCountryCode: baselineCountryCode,
+            baselineRegionName: baselineRegionName,
+            clusterID: clusterID,
+            assetIDs: assetIDs,
+            windowID: windowID,
+            isCountryAggregate: true
         )
     }
 }
@@ -892,9 +942,11 @@ final class TravelClusterAnalyzer {
                 countryCode: nil,
                 countryName: nil,
                 baselineCountryCode: nil,
+                baselineRegionName: nil,
                 clusterID: nil,
                 assetIDs: sampleGroup.map { $0.assetID },
-                windowID: window.id
+                windowID: window.id,
+                isCountryAggregate: false
             ))
         }
         return clusters
@@ -964,9 +1016,11 @@ final class TravelClusterAnalyzer {
             countryCode: lhs.countryCode ?? rhs.countryCode,
             countryName: countryName,
             baselineCountryCode: lhs.baselineCountryCode ?? rhs.baselineCountryCode,
+            baselineRegionName: lhs.baselineRegionName ?? rhs.baselineRegionName,
             clusterID: nil,
             assetIDs: lhs.assetIDs + rhs.assetIDs,
-            windowID: lhs.windowID
+            windowID: lhs.windowID,
+            isCountryAggregate: lhs.isCountryAggregate || rhs.isCountryAggregate
         )
     }
 
@@ -975,23 +1029,7 @@ final class TravelClusterAnalyzer {
         for cluster in clusters.dropFirst() {
             combined = combineClusters(combined, cluster)
         }
-        let countryName = combined.countryName ?? combined.locationDescription
-        combined = TravelCluster(
-            windowStart: combined.windowStart,
-            windowEnd: combined.windowEnd,
-            centroid: combined.centroid,
-            photoCount: combined.photoCount,
-            geoPhotoCount: combined.geoPhotoCount,
-            medianDistanceMeters: combined.medianDistanceMeters,
-            locationDescription: countryName,
-            countryCode: combined.countryCode,
-            countryName: countryName,
-            baselineCountryCode: combined.baselineCountryCode,
-            clusterID: nil,
-            assetIDs: combined.assetIDs,
-            windowID: combined.windowID
-        )
-        return combined
+        return combined.asCountryAggregate()
     }
 
     private func averageCentroid(current: TravelCluster, next: TravelCluster) -> CLLocationCoordinate2D {
@@ -1010,14 +1048,49 @@ final class TravelClusterAnalyzer {
         guard let geocoder else { return clusters }
         return try clusters.map { cluster in
             var updated = cluster
-            if let place = try geocoder.placeInfo(for: cluster.centroid, connection: connection) {
-                updated = updated.withLocationInfo(description: place.description, countryCode: place.countryCode?.uppercased(), countryName: place.countryName)
-            }
+            var baselinePlaceInfo: PlaceInfo?
             if let baselineSegment = baseline(for: cluster.windowStart, baselines: baselines),
                let baselinePlace = try geocoder.placeInfo(for: baselineSegment.coordinate, connection: connection) {
-                updated = updated.withBaselineCountry(baselinePlace.countryCode?.uppercased())
+                baselinePlaceInfo = baselinePlace
+                updated = updated
+                    .withBaselineCountry(baselinePlace.countryCode?.uppercased())
+                    .withBaselineRegion(baselinePlace.regionName)
+            }
+            if let place = try geocoder.placeInfo(for: cluster.centroid, connection: connection) {
+                let desc = locationDescription(for: updated, place: place, baselinePlace: baselinePlaceInfo)
+                updated = updated.withLocationInfo(description: desc, countryCode: place.countryCode?.uppercased(), countryName: place.countryName)
             }
             return updated
+        }
+    }
+
+    private func locationDescription(for cluster: TravelCluster, place: PlaceInfo, baselinePlace: PlaceInfo?) -> String {
+        if cluster.isCountryAggregate {
+            return place.countryName ?? place.description
+        }
+        let city = place.cityName
+        let region = place.regionName
+        let country = place.countryName ?? place.description
+        let baselineCountry = cluster.baselineCountryCode?.uppercased()
+        let clusterCountry = cluster.countryCode?.uppercased()
+        if let baselineCountry, let clusterCountry, baselineCountry == clusterCountry {
+            if let baselineRegion = baselinePlace?.regionName,
+               let region = region,
+               baselineRegion.caseInsensitiveCompare(region) == .orderedSame {
+                return city ?? region
+            }
+            if let city = city, let region = region {
+                return "\(city), \(region)"
+            }
+            return city ?? region ?? country
+        } else {
+            if let city = city {
+                if let country = place.countryName {
+                    return "\(city), \(country)"
+                }
+                return city
+            }
+            return country
         }
     }
 
@@ -1264,6 +1337,16 @@ struct PlaceInfo {
     let description: String
     let countryCode: String?
     let countryName: String?
+    let regionName: String?
+    let cityName: String?
+
+    init(description: String, countryCode: String?, countryName: String?, regionName: String? = nil, cityName: String? = nil) {
+        self.description = description
+        self.countryCode = countryCode
+        self.countryName = countryName
+        self.regionName = regionName
+        self.cityName = cityName
+    }
 }
 
 final class MapboxGeocoder {
@@ -1282,6 +1365,8 @@ final class MapboxGeocoder {
             place_name TEXT NOT NULL,
             country_code TEXT,
             country_name TEXT,
+            region_name TEXT,
+            city_name TEXT,
             PRIMARY KEY (lat_key, lon_key)
         );
         """
@@ -1291,7 +1376,9 @@ final class MapboxGeocoder {
 
         let alterStatements = [
             "ALTER TABLE \(tableName) ADD COLUMN IF NOT EXISTS country_code TEXT;",
-            "ALTER TABLE \(tableName) ADD COLUMN IF NOT EXISTS country_name TEXT;"
+            "ALTER TABLE \(tableName) ADD COLUMN IF NOT EXISTS country_name TEXT;",
+            "ALTER TABLE \(tableName) ADD COLUMN IF NOT EXISTS region_name TEXT;",
+            "ALTER TABLE \(tableName) ADD COLUMN IF NOT EXISTS city_name TEXT;"
         ]
         for alter in alterStatements {
             let alterStatement = try connection.prepareStatement(text: alter)
@@ -1326,23 +1413,27 @@ final class MapboxGeocoder {
             let name = try resolved.columns[0].string()
             let countryCode = try resolved.columns[1].optionalString()
             let countryName = try resolved.columns[2].optionalString()
-            return PlaceInfo(description: name, countryCode: countryCode, countryName: countryName)
+            let regionName = try resolved.columns[3].optionalString()
+            let cityName = try resolved.columns[4].optionalString()
+            return PlaceInfo(description: name, countryCode: countryCode, countryName: countryName, regionName: regionName, cityName: cityName)
         }
         return nil
     }
 
     private func storeCachedPlace(key: (lat: Int, lon: Int), place: PlaceInfo, connection: Connection) throws {
         let sql = """
-        INSERT INTO \(tableName) (lat_key, lon_key, place_name, country_code, country_name)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO \(tableName) (lat_key, lon_key, place_name, country_code, country_name, region_name, city_name)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (lat_key, lon_key) DO UPDATE
         SET place_name = EXCLUDED.place_name,
             country_code = EXCLUDED.country_code,
-            country_name = EXCLUDED.country_name;
+            country_name = EXCLUDED.country_name,
+            region_name = EXCLUDED.region_name,
+            city_name = EXCLUDED.city_name;
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
-        _ = try statement.execute(parameterValues: [key.lat, key.lon, place.description, place.countryCode, place.countryName])
+        _ = try statement.execute(parameterValues: [key.lat, key.lon, place.description, place.countryCode, place.countryName, place.regionName, place.cityName])
     }
 
     private func fetchFromAPI(for coordinate: CLLocationCoordinate2D) throws -> PlaceInfo? {
@@ -1382,10 +1473,19 @@ final class MapboxGeocoder {
             }
             guard let feature = response.features.first else { return nil }
             let country = feature.context?.first { $0.id.hasPrefix("country") }
+            let region = feature.context?.first { $0.id.hasPrefix("region") }?.text
+            let city: String?
+            if feature.placeType.contains("place") {
+                city = feature.text
+            } else {
+                city = feature.context?.first { $0.id.hasPrefix("place") }?.text
+            }
             return PlaceInfo(
                 description: feature.placeName,
                 countryCode: country?.shortCode?.uppercased(),
-                countryName: country?.text
+                countryName: country?.text ?? feature.placeName,
+                regionName: region,
+                cityName: city
             )
         }
     }
@@ -1395,10 +1495,14 @@ final class MapboxGeocoder {
 
         struct Feature: Decodable {
             let placeName: String
+            let text: String
+            let placeType: [String]
             let context: [Context]?
 
             private enum CodingKeys: String, CodingKey {
                 case placeName = "place_name"
+                case text
+                case placeType = "place_type"
                 case context
             }
         }

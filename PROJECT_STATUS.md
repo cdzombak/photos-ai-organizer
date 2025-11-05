@@ -30,3 +30,4 @@ Last Updated: $(date -u +"%Y-%m-%d %H:%M:%SZ")
 - Cluster centroid and counts now track geo-only and total photos separately.
 - Non-geotagged photo inclusion uses a single prepared statement per run for efficiency.
 - Cluster windows now mirror the min/max timestamps of their own photos instead of the broader "away" window, so country trips reflect only the time spent in that area.
+- Location naming now trims redundant country/region info for home clusters, uses city+country for international trips, and falls back to country-only for merged multi-city clusters.
