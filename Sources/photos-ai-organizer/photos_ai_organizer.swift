@@ -1645,11 +1645,22 @@ final class TravelAlbumSynchronizer {
         let location = cluster.locationDescription ?? cluster.countryName ?? "Travel"
         let start = dateFormatter.string(from: cluster.windowStart)
         let end = dateFormatter.string(from: cluster.windowEnd)
+        let calendar = Calendar(identifier: .gregorian)
+        let components = calendar.dateComponents([.year, .month], from: cluster.windowStart)
+        let endComponents = calendar.dateComponents([.year, .month], from: cluster.windowEnd)
+        let startYear = components.year.map(String.init) ?? ""
+        let startMonth = components.month.map { String(format: "%02d", $0) } ?? ""
+        let endYear = endComponents.year.map(String.init) ?? ""
+        let endMonth = endComponents.month.map { String(format: "%02d", $0) } ?? ""
         return namePattern
             .replacingOccurrences(of: "{location}", with: location)
             .replacingOccurrences(of: "{country}", with: cluster.countryName ?? location)
             .replacingOccurrences(of: "{start}", with: start)
             .replacingOccurrences(of: "{end}", with: end)
+            .replacingOccurrences(of: "{start_yyyy}", with: startYear)
+            .replacingOccurrences(of: "{start_mm}", with: startMonth)
+            .replacingOccurrences(of: "{end_yyyy}", with: endYear)
+            .replacingOccurrences(of: "{end_mm}", with: endMonth)
     }
 
     private func ensureFolder() throws -> PHCollectionList {

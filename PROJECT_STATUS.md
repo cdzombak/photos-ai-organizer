@@ -31,3 +31,4 @@ Last Updated: $(date -u +"%Y-%m-%d %H:%M:%SZ")
 - Non-geotagged photo inclusion uses a single prepared statement per run for efficiency.
 - Cluster windows now mirror the min/max timestamps of their own photos instead of the broader "away" window, so country trips reflect only the time spent in that area.
 - Location naming now trims redundant country/region info for home clusters, uses city+country for international trips, and falls back to country-only for merged multi-city clusters.
+- Album naming now supports `{start_yyyy}`, `{start_mm}`, `{end_yyyy}`, `{end_mm}` macros for custom formats.
