@@ -53,10 +53,12 @@ enum CLICommand: String {
 struct CLIOptions {
     let command: CLICommand
     let configPath: String
+    let gradeConcurrency: Int?
 
     init(arguments: [String]) throws {
         var configPath = "photos-config.yml"
         var command: CLICommand?
+        var gradeConcurrency: Int?
 
         let args = Array(arguments.dropFirst())
         var index = args.startIndex
@@ -73,6 +75,19 @@ struct CLIOptions {
                 index = valueIndex
             case "--help", "-h":
                 command = .help
+            case "--concurrency":
+                let valueIndex = args.index(after: index)
+                guard args.indices.contains(valueIndex) else {
+                    throw ExportError.invalidArgument("--concurrency requires a value (e.g. --concurrency 10)")
+                }
+                guard let currentCommand = command, currentCommand == .grade else {
+                    throw ExportError.invalidArgument("--concurrency can only be used with the 'grade' subcommand")
+                }
+                guard let value = Int(args[valueIndex]), value > 0 else {
+                    throw ExportError.invalidArgument("--concurrency expects a positive integer")
+                }
+                gradeConcurrency = value
+                index = valueIndex
             default:
                 if argument.hasPrefix("--") {
                     throw ExportError.invalidArgument("Unknown option \(argument)")
@@ -90,6 +105,7 @@ struct CLIOptions {
 
         self.command = command ?? .help
         self.configPath = configPath
+        self.gradeConcurrency = gradeConcurrency
     }
 }
 
@@ -131,7 +147,7 @@ enum PhotoLibraryAuthorizer {
     }
 }
 
-final class ProgressReporter {
+final class ProgressReporter: @unchecked Sendable {
     private let total: Int
     private let label: String
     private let interval: Int
@@ -484,7 +500,7 @@ struct PhotosMetadataExporterCLI {
                 print(summary)
             case .grade:
                 let grader = PhotoGradeCommand(config: config)
-                let summary = try grader.run()
+                let summary = try grader.run(concurrency: options.gradeConcurrency ?? 10)
                 print(summary)
             case .serveGrades:
                 let server = PhotoGradeServer(config: config)
@@ -511,7 +527,7 @@ SUBCOMMANDS:
   import               Scan Photos and upsert metadata into Postgres.
   run-travel-pipeline  Build/annotate travel clusters and persist results.
   sync-travel-albums   Mirror stored clusters into Photos albums.
-  grade                Send Photos to an AI model for 0–10 quality grading.
+  grade                Send Photos to an AI model for 0–10 quality grading. (--concurrency N)
   serve-grades         Run a simple web server previewing graded photos.
   help                 Show this message.
 

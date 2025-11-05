@@ -9,7 +9,7 @@ Swift CLI that syncs Apple Photos metadata into PostgreSQL and analyzes it to or
 
 - `help` – show CLI usage and options.
 - `import` – scan Photos and upsert asset metadata into Postgres.
-- `grade` – ask an AI model to rate all photos 0–10.
+- `grade` – ask an AI model to rate all photos 0–10 (`--concurrency N` to control parallelism; default 10).
 - `serve-grades` – expose a simple web UI previewing graded samples.
 
 Global flags: `--config <file>` (defaults to `photos-config.yml`), `--help`/`-h`.

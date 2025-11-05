@@ -176,7 +176,7 @@ public struct AlbumConfig: Decodable {
     }
 }
 
-public struct AIConfig: Decodable {
+public struct AIConfig: Decodable, Sendable {
     public let baseURL: URL
     public let apiKey: String
     public let model: String

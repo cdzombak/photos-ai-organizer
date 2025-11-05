@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 @preconcurrency import Photos
 import Core
 
-struct PhotoLibraryAdapter {
+struct PhotoLibraryAdapter: @unchecked Sendable {
     func ensureAccess() throws {
         var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         switch status {

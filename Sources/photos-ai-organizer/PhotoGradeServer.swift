@@ -2,7 +2,7 @@ import Foundation
 import NIO
 import NIOHTTP1
 import Persistence
-import PostgresClientKit
+@preconcurrency import PostgresClientKit
 
 final class PhotoGradeServer: @unchecked Sendable {
     private let config: PostgresConfig

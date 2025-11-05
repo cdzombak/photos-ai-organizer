@@ -1,7 +1,7 @@
 import Foundation
 import PostgresClientKit
 
-public final class ImageGradeStore {
+public final class ImageGradeStore: @unchecked Sendable {
     private static let gradeableUTIs = [
         "public.jpeg",
         "public.heic",
@@ -30,18 +30,22 @@ public final class ImageGradeStore {
         try runner.run([MigrationStep(identifier: "image_grade", statements: statements)])
     }
 
-    public func assetIDsNeedingGrades(connection: Connection, limit: Int = 50) throws -> [String] {
-        let sql = """
+    public func assetIDsNeedingGrades(connection: Connection, limit: Int? = nil) throws -> [String] {
+        var sql = """
         SELECT m.asset_id, m.uniform_type_identifier
         FROM \(config.tableName) m
         LEFT JOIN image_grade g ON g.asset_id = m.asset_id
         WHERE g.grade IS NULL
         ORDER BY m.creation_date ASC NULLS LAST
-        LIMIT $1;
         """
+        var parameters: [PostgresValueConvertible?] = []
+        if let limit {
+            sql += "LIMIT $1"
+            parameters.append(limit)
+        }
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
-        let cursor = try statement.execute(parameterValues: [limit])
+        let cursor = try statement.execute(parameterValues: parameters)
         var ids: [String] = []
         for row in cursor {
             let resolved = try row.get()
