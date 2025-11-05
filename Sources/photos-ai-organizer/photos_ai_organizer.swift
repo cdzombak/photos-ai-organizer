@@ -3,6 +3,7 @@ import Foundation
 import FoundationNetworking
 #endif
 import CoreLocation
+import CryptoKit
 @preconcurrency import Photos
 import PostgresClientKit
 import Yams
@@ -39,7 +40,7 @@ enum ExportError: Error, CustomStringConvertible {
 
 enum CLICommand: String {
     case `import` = "import"
-    case listTravelClusters = "list-travel-clusters"
+    case runTravelPipeline = "run-travel-pipeline"
 }
 
 struct CLIOptions {
@@ -79,7 +80,7 @@ struct CLIOptions {
                 if command == nil, let parsed = CLICommand(rawValue: argument) {
                     command = parsed
                 } else if command == nil {
-                    throw ExportError.invalidArgument("Unknown subcommand '\(argument)'. Try 'import'.")
+                    throw ExportError.invalidArgument("Unknown subcommand '\(argument)'. Try 'import' or 'run-travel-pipeline'.")
                 } else {
                     throw ExportError.invalidArgument("Unexpected argument '\(argument)'.")
                 }
@@ -539,20 +540,66 @@ final class PhotoMetadataExporter {
 
 // MARK: - Travel Clusters
 
+private let coordinateScale = 10000.0
+
 struct TravelCluster {
     let windowStart: Date
     let windowEnd: Date
     let centroid: CLLocationCoordinate2D
     let photoCount: Int
+    let medianDistanceMeters: Double
     let locationDescription: String?
+    let countryCode: String?
+    let countryName: String?
+    let baselineCountryCode: String?
+    let clusterID: String?
+    let assetIDs: [String]
 
-    func withLocationDescription(_ description: String?) -> TravelCluster {
+    func withLocationInfo(description: String?, countryCode: String?, countryName: String?) -> TravelCluster {
         TravelCluster(
             windowStart: windowStart,
             windowEnd: windowEnd,
             centroid: centroid,
             photoCount: photoCount,
-            locationDescription: description
+            medianDistanceMeters: medianDistanceMeters,
+            locationDescription: description,
+            countryCode: countryCode,
+            countryName: countryName,
+            baselineCountryCode: baselineCountryCode,
+            clusterID: clusterID,
+            assetIDs: assetIDs
+        )
+    }
+
+    func withBaselineCountry(_ baselineCode: String?) -> TravelCluster {
+        TravelCluster(
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            centroid: centroid,
+            photoCount: photoCount,
+            medianDistanceMeters: medianDistanceMeters,
+            locationDescription: locationDescription,
+            countryCode: countryCode,
+            countryName: countryName,
+            baselineCountryCode: baselineCode,
+            clusterID: clusterID,
+            assetIDs: assetIDs
+        )
+    }
+
+    func withClusterID(_ id: String) -> TravelCluster {
+        TravelCluster(
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            centroid: centroid,
+            photoCount: photoCount,
+            medianDistanceMeters: medianDistanceMeters,
+            locationDescription: locationDescription,
+            countryCode: countryCode,
+            countryName: countryName,
+            baselineCountryCode: baselineCountryCode,
+            clusterID: id,
+            assetIDs: assetIDs
         )
     }
 }
@@ -582,25 +629,26 @@ final class TravelClusterAnalyzer {
     private let baselineStepMonths = 4
     private let travelDistanceThresholdMeters = 50_000.0
     private let clusterMergeDistanceMeters = 200_000.0
-    private let binSizeMeters = 5_000.0
-    private let minimumPhotosPerCluster = 5
+    private let binSizeMeters = 10_000.0
+    private let minimumPhotosPerCluster = 3
     private let minimumTravelDays = 2
     private let awayTolerance = 0.95 // fraction of samples that must be away from baseline
+    private let countryMergeGapSeconds: TimeInterval = 172_800 // 2 days
 
     init(config: PostgresConfig) {
         self.config = config
         self.mapboxConfig = config.mapbox
     }
 
-    func run() throws -> [TravelCluster] {
+    func run() throws -> String {
         let connection = try Connection(configuration: config.makeConnectionConfiguration())
         defer { connection.close() }
 
         let samples = try fetchSamples(connection: connection)
-        guard !samples.isEmpty else { return [] }
+        guard !samples.isEmpty else { return "No travel data available." }
 
         let baselines = computeBaselines(samples: samples)
-        guard !baselines.isEmpty else { return [] }
+        guard !baselines.isEmpty else { return "Insufficient baseline data." }
 
         let dayBuckets = bucketSamplesByDay(samples)
         let travelWindows = detectTravelWindows(dayBuckets: dayBuckets, baselines: baselines)
@@ -616,18 +664,24 @@ final class TravelClusterAnalyzer {
         if let geocoder {
             try geocoder.ensureCacheTableExists(connection: connection)
         }
-        let annotated = try annotateClusters(merged, connection: connection, geocoder: geocoder)
-        return annotated.sorted { lhs, rhs in
+        try ensureTravelClusterTableExists(connection: connection)
+        try ensureClusterMembershipTableExists(connection: connection)
+        let annotated = try annotateClusters(merged, baselines: baselines, connection: connection, geocoder: geocoder)
+        let countryMerged = mergeCountryClusters(annotated)
+        let identified = assignClusterIDs(countryMerged)
+        try persistClusters(identified, connection: connection)
+        let sorted = identified.sorted { lhs, rhs in
             if lhs.windowStart == rhs.windowStart {
                 return lhs.photoCount > rhs.photoCount
             }
             return lhs.windowStart < rhs.windowStart
         }
+        return travelSummary(for: sorted)
     }
 
     private func fetchSamples(connection: Connection) throws -> [PhotoSample] {
         let sql = """
-        SELECT creation_date, location_latitude, location_longitude
+        SELECT asset_id, creation_date, location_latitude, location_longitude
         FROM \(config.tableName)
         WHERE location_latitude IS NOT NULL
           AND location_longitude IS NOT NULL
@@ -641,15 +695,16 @@ final class TravelClusterAnalyzer {
         for row in cursor {
             let resolved = try row.get()
             guard
-                let dateValue = try resolved.columns[0].optionalTimestampWithTimeZone()?.date,
-                let latitude = try resolved.columns[1].optionalDouble(),
-                let longitude = try resolved.columns[2].optionalDouble()
+                let assetID = try resolved.columns[0].optionalString(),
+                let dateValue = try resolved.columns[1].optionalTimestampWithTimeZone()?.date,
+                let latitude = try resolved.columns[2].optionalDouble(),
+                let longitude = try resolved.columns[3].optionalDouble()
             else {
                 continue
             }
             let coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
             guard CLLocationCoordinate2DIsValid(coordinate) else { continue }
-            samples.append(PhotoSample(date: dateValue, coordinate: coordinate))
+            samples.append(PhotoSample(date: dateValue, coordinate: coordinate, assetID: assetID))
         }
         return samples
     }
@@ -735,16 +790,16 @@ final class TravelClusterAnalyzer {
                 if let previousDay = lastDay,
                    calendar.date(byAdding: .day, value: 1, to: previousDay) == bucket.dayStart {
                     // continue current window
-                } else {
-                    finalizeWindow()
-                    currentStart = bucket.dayStart
-                }
-                currentSamples.append(contentsOf: bucket.samples)
-                lastDay = bucket.dayStart
-                dayCount += 1
-            } else {
-                finalizeWindow()
-            }
+        } else {
+            finalizeWindow()
+            currentStart = bucket.dayStart
+        }
+        currentSamples.append(contentsOf: bucket.samples)
+        lastDay = bucket.dayStart
+        dayCount += 1
+    } else {
+        finalizeWindow()
+    }
         }
         finalizeWindow()
         return windows
@@ -764,17 +819,24 @@ final class TravelClusterAnalyzer {
     }
 
     private func buildClusters(for samples: [PhotoSample], windowStart: Date, windowEnd: Date) -> [TravelCluster] {
-        let grouped = groupSamplesByBin(samples)
+        let grouped = Dictionary(grouping: samples, by: { binKey(for: $0.coordinate) })
         var clusters: [TravelCluster] = []
         for (_, sampleGroup) in grouped {
             guard sampleGroup.count >= minimumPhotosPerCluster else { continue }
             let center = centroid(of: sampleGroup)
+            let medianDistance = medianDistanceMeters(of: sampleGroup, center: center)
             clusters.append(TravelCluster(
                 windowStart: windowStart,
                 windowEnd: windowEnd,
                 centroid: center,
                 photoCount: sampleGroup.count,
-                locationDescription: nil
+                medianDistanceMeters: medianDistance,
+                locationDescription: nil,
+                countryCode: nil,
+                countryName: nil,
+                baselineCountryCode: nil,
+                clusterID: nil,
+                assetIDs: sampleGroup.map { $0.assetID }
             ))
         }
         return clusters
@@ -789,13 +851,7 @@ final class TravelClusterAnalyzer {
             let gap = cluster.windowStart.timeIntervalSince(current.windowEnd)
             let withinDistance = distanceMeters(cluster.centroid, current.centroid) <= clusterMergeDistanceMeters
             if gap <= 86400 && withinDistance {
-                current = TravelCluster(
-                    windowStart: min(current.windowStart, cluster.windowStart),
-                    windowEnd: max(current.windowEnd, cluster.windowEnd),
-                    centroid: averageCentroid(current: current, next: cluster),
-                    photoCount: current.photoCount + cluster.photoCount,
-                    locationDescription: nil
-                )
+                current = combineClusters(current, cluster)
             } else {
                 merged.append(current)
                 current = cluster
@@ -803,6 +859,57 @@ final class TravelClusterAnalyzer {
         }
         merged.append(current)
         return merged
+    }
+
+    private func mergeCountryClusters(_ clusters: [TravelCluster]) -> [TravelCluster] {
+        guard !clusters.isEmpty else { return [] }
+        var merged: [TravelCluster] = []
+        var current = clusters[0]
+
+        for cluster in clusters.dropFirst() {
+            if shouldMergeByCountry(current, cluster) {
+                current = combineClusters(current, cluster)
+            } else {
+                merged.append(current)
+                current = cluster
+            }
+        }
+        merged.append(current)
+        return merged
+    }
+
+    private func shouldMergeByCountry(_ lhs: TravelCluster, _ rhs: TravelCluster) -> Bool {
+        guard
+            let country = lhs.countryCode,
+            let otherCountry = rhs.countryCode,
+            country == otherCountry,
+            country != lhs.baselineCountryCode,
+            otherCountry != rhs.baselineCountryCode
+        else { return false }
+        let overlap = rhs.windowStart <= lhs.windowEnd && rhs.windowEnd >= lhs.windowStart
+        let gap = rhs.windowStart.timeIntervalSince(lhs.windowEnd)
+        return overlap || gap <= countryMergeGapSeconds
+    }
+
+    private func combineClusters(_ lhs: TravelCluster, _ rhs: TravelCluster) -> TravelCluster {
+        let totalCount = lhs.photoCount + rhs.photoCount
+        let weightedLat = (lhs.centroid.latitude * Double(lhs.photoCount) + rhs.centroid.latitude * Double(rhs.photoCount)) / Double(totalCount)
+        let weightedLon = (lhs.centroid.longitude * Double(lhs.photoCount) + rhs.centroid.longitude * Double(rhs.photoCount)) / Double(totalCount)
+        let countryName = lhs.countryName ?? rhs.countryName
+        let locationDescription = countryName ?? lhs.locationDescription ?? rhs.locationDescription
+        return TravelCluster(
+            windowStart: min(lhs.windowStart, rhs.windowStart),
+            windowEnd: max(lhs.windowEnd, rhs.windowEnd),
+            centroid: CLLocationCoordinate2D(latitude: weightedLat, longitude: weightedLon),
+            photoCount: totalCount,
+            medianDistanceMeters: max(lhs.medianDistanceMeters, rhs.medianDistanceMeters),
+            locationDescription: locationDescription,
+            countryCode: lhs.countryCode ?? rhs.countryCode,
+            countryName: countryName,
+            baselineCountryCode: lhs.baselineCountryCode ?? rhs.baselineCountryCode,
+            clusterID: nil,
+            assetIDs: lhs.assetIDs + rhs.assetIDs
+        )
     }
 
     private func averageCentroid(current: TravelCluster, next: TravelCluster) -> CLLocationCoordinate2D {
@@ -814,14 +921,154 @@ final class TravelClusterAnalyzer {
 
     private func annotateClusters(
         _ clusters: [TravelCluster],
+        baselines: [BaselineSegment],
         connection: Connection,
         geocoder: MapboxGeocoder?
     ) throws -> [TravelCluster] {
         guard let geocoder else { return clusters }
         return try clusters.map { cluster in
-            let description = try geocoder.placeName(for: cluster.centroid, connection: connection)
-            return cluster.withLocationDescription(description)
+            var updated = cluster
+            if let place = try geocoder.placeInfo(for: cluster.centroid, connection: connection) {
+                updated = updated.withLocationInfo(description: place.description, countryCode: place.countryCode?.uppercased(), countryName: place.countryName)
+            }
+            if let baselineSegment = baseline(for: cluster.windowStart, baselines: baselines),
+               let baselinePlace = try geocoder.placeInfo(for: baselineSegment.coordinate, connection: connection) {
+                updated = updated.withBaselineCountry(baselinePlace.countryCode?.uppercased())
+            }
+            return updated
         }
+    }
+
+    private func assignClusterIDs(_ clusters: [TravelCluster]) -> [TravelCluster] {
+        clusters.map { cluster in
+            let id = deterministicClusterID(for: cluster)
+            return cluster.withClusterID(id)
+        }
+    }
+
+    private func deterministicClusterID(for cluster: TravelCluster) -> String {
+        let latKey = Int((cluster.centroid.latitude * coordinateScale).rounded())
+        let lonKey = Int((cluster.centroid.longitude * coordinateScale).rounded())
+        let startKey = Int(cluster.windowStart.timeIntervalSince1970)
+        let endKey = Int(cluster.windowEnd.timeIntervalSince1970)
+        let payload = "\(latKey)|\(lonKey)|\(startKey)|\(endKey)"
+        let digest = SHA256.hash(data: Data(payload.utf8))
+        return digest.prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func ensureTravelClusterTableExists(connection: Connection) throws {
+        let sql = """
+        CREATE TABLE IF NOT EXISTS travel_clusters (
+            cluster_id TEXT PRIMARY KEY,
+            window_start TIMESTAMPTZ NOT NULL,
+            window_end TIMESTAMPTZ NOT NULL,
+            centroid_lat DOUBLE PRECISION NOT NULL,
+            centroid_lon DOUBLE PRECISION NOT NULL,
+            photo_count INTEGER NOT NULL,
+            median_distance_m DOUBLE PRECISION NOT NULL DEFAULT 0,
+            country_code TEXT,
+            country_name TEXT,
+            baseline_country_code TEXT,
+            location_description TEXT,
+            computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute()
+
+        let alterStatements = [
+            "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS median_distance_m DOUBLE PRECISION NOT NULL DEFAULT 0;",
+            "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS country_code TEXT;",
+            "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS country_name TEXT;",
+            "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS baseline_country_code TEXT;"
+        ]
+        for alter in alterStatements {
+            let alterStatement = try connection.prepareStatement(text: alter)
+            defer { alterStatement.close() }
+            _ = try alterStatement.execute()
+        }
+    }
+
+    private func ensureClusterMembershipTableExists(connection: Connection) throws {
+        let sql = """
+        CREATE TABLE IF NOT EXISTS travel_cluster_assets (
+            cluster_id TEXT NOT NULL REFERENCES travel_clusters(cluster_id) ON DELETE CASCADE,
+            asset_id TEXT NOT NULL,
+            PRIMARY KEY (cluster_id, asset_id)
+        );
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute()
+    }
+
+    private func persistClusters(_ clusters: [TravelCluster], connection: Connection) throws {
+        let sql = """
+        INSERT INTO travel_clusters (
+            cluster_id, window_start, window_end, centroid_lat, centroid_lon, photo_count, median_distance_m, country_code, country_name, baseline_country_code, location_description, computed_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+        ON CONFLICT (cluster_id) DO UPDATE SET
+            window_start = EXCLUDED.window_start,
+            window_end = EXCLUDED.window_end,
+            centroid_lat = EXCLUDED.centroid_lat,
+            centroid_lon = EXCLUDED.centroid_lon,
+            photo_count = EXCLUDED.photo_count,
+            median_distance_m = EXCLUDED.median_distance_m,
+            country_code = EXCLUDED.country_code,
+            country_name = EXCLUDED.country_name,
+            baseline_country_code = EXCLUDED.baseline_country_code,
+            location_description = EXCLUDED.location_description,
+            computed_at = NOW();
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        for cluster in clusters {
+            guard let id = cluster.clusterID else { continue }
+            let parameters: [PostgresValueConvertible?] = [
+                id,
+                PostgresTimestampWithTimeZone(date: cluster.windowStart),
+                PostgresTimestampWithTimeZone(date: cluster.windowEnd),
+                cluster.centroid.latitude,
+                cluster.centroid.longitude,
+                cluster.photoCount,
+                cluster.medianDistanceMeters,
+                cluster.countryCode,
+                cluster.countryName,
+                cluster.baselineCountryCode,
+                cluster.locationDescription
+            ]
+            try statement.execute(parameterValues: parameters)
+            try replaceClusterMembership(clusterID: id, assetIDs: cluster.assetIDs, connection: connection)
+        }
+    }
+
+    private func replaceClusterMembership(clusterID: String, assetIDs: [String], connection: Connection) throws {
+        let deleteSQL = "DELETE FROM travel_cluster_assets WHERE cluster_id = $1;"
+        let deleteStatement = try connection.prepareStatement(text: deleteSQL)
+        defer { deleteStatement.close() }
+        try deleteStatement.execute(parameterValues: [clusterID])
+
+        guard !assetIDs.isEmpty else { return }
+        let insertSQL = "INSERT INTO travel_cluster_assets (cluster_id, asset_id) VALUES ($1, $2) ON CONFLICT DO NOTHING;"
+        let insertStatement = try connection.prepareStatement(text: insertSQL)
+        defer { insertStatement.close() }
+        for assetID in Set(assetIDs) {
+            try insertStatement.execute(parameterValues: [clusterID, assetID])
+        }
+    }
+
+    private func travelSummary(for clusters: [TravelCluster]) -> String {
+        guard !clusters.isEmpty else { return "No travel clusters detected." }
+        let totalPhotos = clusters.reduce(0) { $0 + $1.photoCount }
+        let formatter = ISO8601DateFormatter()
+        let lines = clusters.map { cluster -> String in
+            let start = formatter.string(from: cluster.windowStart)
+            let end = formatter.string(from: cluster.windowEnd)
+            let location = cluster.locationDescription ?? String(format: "(%.5f, %.5f)", cluster.centroid.latitude, cluster.centroid.longitude)
+            return "- \(start) → \(end): \(cluster.photoCount) photos near \(location)"
+        }
+        return "Detected \(clusters.count) clusters (\(totalPhotos) photos):\n" + lines.joined(separator: "\n")
     }
 
     private func groupSamplesByBin(_ samples: [PhotoSample]) -> [BinKey: [PhotoSample]] {
@@ -839,6 +1086,17 @@ final class TravelClusterAnalyzer {
         }
         let count = Double(samples.count)
         return CLLocationCoordinate2D(latitude: lat / count, longitude: lon / count)
+    }
+
+    private func medianDistanceMeters(of samples: [PhotoSample], center: CLLocationCoordinate2D) -> Double {
+        let distances = samples.map { distanceMeters($0.coordinate, center) }.sorted()
+        guard !distances.isEmpty else { return 0 }
+        let mid = distances.count / 2
+        if distances.count % 2 == 0 {
+            return (distances[mid - 1] + distances[mid]) / 2.0
+        } else {
+            return distances[mid]
+        }
     }
 
     private func binKey(for coordinate: CLLocationCoordinate2D) -> BinKey {
@@ -863,10 +1121,15 @@ final class TravelClusterAnalyzer {
     }
 }
 
+struct PlaceInfo {
+    let description: String
+    let countryCode: String?
+    let countryName: String?
+}
+
 final class MapboxGeocoder {
     private let config: MapboxConfig
     private let tableName = "location_geocode_cache"
-    private let coordinateScale = 10000.0 // four decimal places
 
     init(config: MapboxConfig) {
         self.config = config
@@ -878,21 +1141,33 @@ final class MapboxGeocoder {
             lat_key INTEGER NOT NULL,
             lon_key INTEGER NOT NULL,
             place_name TEXT NOT NULL,
+            country_code TEXT,
+            country_name TEXT,
             PRIMARY KEY (lat_key, lon_key)
         );
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
         _ = try statement.execute()
+
+        let alterStatements = [
+            "ALTER TABLE \(tableName) ADD COLUMN IF NOT EXISTS country_code TEXT;",
+            "ALTER TABLE \(tableName) ADD COLUMN IF NOT EXISTS country_name TEXT;"
+        ]
+        for alter in alterStatements {
+            let alterStatement = try connection.prepareStatement(text: alter)
+            defer { alterStatement.close() }
+            _ = try alterStatement.execute()
+        }
     }
 
-    func placeName(for coordinate: CLLocationCoordinate2D, connection: Connection) throws -> String? {
+    func placeInfo(for coordinate: CLLocationCoordinate2D, connection: Connection) throws -> PlaceInfo? {
         let key = cacheKey(for: coordinate)
-        if let cached = try lookupCachedName(key: key, connection: connection) {
+        if let cached = try lookupCachedPlace(key: key, connection: connection) {
             return cached
         }
         guard let fetched = try fetchFromAPI(for: coordinate) else { return nil }
-        try storeCachedName(key: key, name: fetched, connection: connection)
+        try storeCachedPlace(key: key, place: fetched, connection: connection)
         return fetched
     }
 
@@ -902,30 +1177,36 @@ final class MapboxGeocoder {
         return (latKey, lonKey)
     }
 
-    private func lookupCachedName(key: (lat: Int, lon: Int), connection: Connection) throws -> String? {
-        let sql = "SELECT place_name FROM \(tableName) WHERE lat_key = $1 AND lon_key = $2 LIMIT 1;"
+    private func lookupCachedPlace(key: (lat: Int, lon: Int), connection: Connection) throws -> PlaceInfo? {
+        let sql = "SELECT place_name, country_code, country_name FROM \(tableName) WHERE lat_key = $1 AND lon_key = $2 LIMIT 1;"
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
         let cursor = try statement.execute(parameterValues: [key.lat, key.lon])
         for row in cursor {
             let resolved = try row.get()
-            return try resolved.columns[0].string()
+            let name = try resolved.columns[0].string()
+            let countryCode = try resolved.columns[1].optionalString()
+            let countryName = try resolved.columns[2].optionalString()
+            return PlaceInfo(description: name, countryCode: countryCode, countryName: countryName)
         }
         return nil
     }
 
-    private func storeCachedName(key: (lat: Int, lon: Int), name: String, connection: Connection) throws {
+    private func storeCachedPlace(key: (lat: Int, lon: Int), place: PlaceInfo, connection: Connection) throws {
         let sql = """
-        INSERT INTO \(tableName) (lat_key, lon_key, place_name)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (lat_key, lon_key) DO UPDATE SET place_name = EXCLUDED.place_name;
+        INSERT INTO \(tableName) (lat_key, lon_key, place_name, country_code, country_name)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (lat_key, lon_key) DO UPDATE
+        SET place_name = EXCLUDED.place_name,
+            country_code = EXCLUDED.country_code,
+            country_name = EXCLUDED.country_name;
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
-        _ = try statement.execute(parameterValues: [key.lat, key.lon, name])
+        _ = try statement.execute(parameterValues: [key.lat, key.lon, place.description, place.countryCode, place.countryName])
     }
 
-    private func fetchFromAPI(for coordinate: CLLocationCoordinate2D) throws -> String? {
+    private func fetchFromAPI(for coordinate: CLLocationCoordinate2D) throws -> PlaceInfo? {
         let lon = String(format: "%.6f", coordinate.longitude)
         let lat = String(format: "%.6f", coordinate.latitude)
         var components = URLComponents(string: "https://api.mapbox.com/geocoding/v5/mapbox.places/\(lon),\(lat).json")!
@@ -960,7 +1241,13 @@ final class MapboxGeocoder {
             guard let response = try? decoder.decode(MapboxResponse.self, from: data) else {
                 return nil
             }
-            return response.features.first?.placeName
+            guard let feature = response.features.first else { return nil }
+            let country = feature.context?.first { $0.id.hasPrefix("country") }
+            return PlaceInfo(
+                description: feature.placeName,
+                countryCode: country?.shortCode?.uppercased(),
+                countryName: country?.text
+            )
         }
     }
 
@@ -969,9 +1256,23 @@ final class MapboxGeocoder {
 
         struct Feature: Decodable {
             let placeName: String
+            let context: [Context]?
 
             private enum CodingKeys: String, CodingKey {
                 case placeName = "place_name"
+                case context
+            }
+        }
+
+        struct Context: Decodable {
+            let id: String
+            let text: String
+            let shortCode: String?
+
+            private enum CodingKeys: String, CodingKey {
+                case id
+                case text
+                case shortCode = "short_code"
             }
         }
     }
@@ -980,6 +1281,7 @@ final class MapboxGeocoder {
 struct PhotoSample {
     let date: Date
     let coordinate: CLLocationCoordinate2D
+    let assetID: String
 }
 
 struct BinKey: Hashable {
@@ -1001,20 +1303,10 @@ struct PhotosMetadataExporterCLI {
                 let result = try exporter.runImport()
                 let summary = "Imported \(result.upserted) assets; removed \(result.deleted) missing entries from \(config.tableName)."
                 FileHandle.standardError.write("[photos-ai-organizer] \(summary)\n".data(using: .utf8)!)
-            case .listTravelClusters:
+            case .runTravelPipeline:
                 let analyzer = TravelClusterAnalyzer(config: config)
-                let clusters = try analyzer.run()
-                if clusters.isEmpty {
-                    print("No travel clusters detected.")
-                } else {
-                    let formatter = ISO8601DateFormatter()
-                    for cluster in clusters {
-                        let start = formatter.string(from: cluster.windowStart)
-                        let end = formatter.string(from: cluster.windowEnd)
-                        let location = cluster.locationDescription ?? String(format: "(%.5f, %.5f)", cluster.centroid.latitude, cluster.centroid.longitude)
-                        print("\(start) -> \(end): \(cluster.photoCount) photos near \(location)")
-                    }
-                }
+                let summary = try analyzer.run()
+                print(summary)
             }
         } catch {
             let message = "Error: \(error)"
