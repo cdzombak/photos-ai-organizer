@@ -1,0 +1,37 @@
+AGENTS: DO NOT TOUCH THIS FILE
+
+# general
+
+- refactor & restructure
+
+# temporal albums
+
+## travel pipeline
+
+- integrate non-geocoded photos within the time window
+
+## visit (face) pipeline
+
+- establish face baseline
+- cluster high numbers of atypical face appearances over 2-day windows
+- integrate no-face photos within the time window
+
+## holiday pipeline
+
+- start with date of holiday/birthday/etc. +/- 3 days
+- work outward from the actual date, merging face and travel clusters originating
+
+## superpipeline
+
+- consolidate clusters based on overlapping dates, preferring "holiday" as the primary theme, then "trip", then "visit"
+- create albums (eventually this is the only spot that'll do this)
+
+# thematic albums
+
+## B&W
+
+simple algorithm
+
+## Others
+
+brute-force LLM approach with albums query, tracking which photos are/aren't in which albums
