@@ -13,9 +13,43 @@ let package = Package(
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.0.6"),
     ],
     targets: [
+        .target(
+            name: "Core",
+            dependencies: [],
+            linkerSettings: [
+                .linkedFramework("Photos")
+            ]
+        ),
+        .target(
+            name: "Persistence",
+            dependencies: [
+                "Core",
+                .product(name: "PostgresClientKit", package: "PostgresClientKit"),
+                .product(name: "Yams", package: "Yams")
+            ]
+        ),
+        .target(
+            name: "TravelPipeline",
+            dependencies: [
+                "Core",
+                "Persistence",
+                .product(name: "PostgresClientKit", package: "PostgresClientKit")
+            ]
+        ),
+        .testTarget(
+            name: "TravelPipelineTests",
+            dependencies: ["TravelPipeline"]
+        ),
+        .testTarget(
+            name: "PersistenceTests",
+            dependencies: ["Persistence"]
+        ),
         .executableTarget(
             name: "photos-ai-organizer",
             dependencies: [
+                "Core",
+                "Persistence",
+                "TravelPipeline",
                 .product(name: "PostgresClientKit", package: "PostgresClientKit"),
                 .product(name: "Yams", package: "Yams"),
             ],
