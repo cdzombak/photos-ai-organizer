@@ -33,15 +33,23 @@ struct AIGrader {
 
         let responseData = try synchronousRequest(request: request)
         let decoder = JSONDecoder()
-        let completion = try decoder.decode(ChatCompletionResponse.self, from: responseData)
-        guard
-            let content = completion.choices.first?.message.content,
-            let text = content.compactMap({ $0.asText }).joined(separator: " ").data(using: .utf8)
-        else {
+        guard let completion = try? decoder.decode(ChatCompletionResponse.self, from: responseData) else {
+            if let apiError = try? decoder.decode(AIErrorResponse.self, from: responseData) {
+                throw ExportError.invalidArgument("AI error: \(apiError.error.message)")
+            }
+            if let text = String(data: responseData, encoding: .utf8) {
+                throw ExportError.invalidArgument("Unexpected AI response: \(text)")
+            }
+            throw ExportError.invalidArgument("Unexpected AI response (binary)")
+        }
+        guard let rawText = completion.choices.first?.message.content else {
             throw ExportError.invalidConfig("AI response missing content")
         }
-        let gradePayload = try JSONDecoder().decode(AIGrade.self, from: text)
-        return gradePayload.grade
+        if let data = rawText.data(using: .utf8),
+           let gradePayload = try? JSONDecoder().decode(AIGrade.self, from: data) {
+            return gradePayload.grade
+        }
+        throw ExportError.invalidArgument("Unexpected AI response: \(rawText)")
     }
 
     private func synchronousRequest(request: URLRequest) throws -> Data {
@@ -107,20 +115,19 @@ struct AIGrader {
         }
 
         struct Message: Decodable {
-            let content: [Content]
-        }
-
-        struct Content: Decodable {
-            let type: String
-            let text: String?
-
-            var asText: String? {
-                text
-            }
+            let content: String?
         }
     }
 
     private struct AIGrade: Decodable {
         let grade: Int
+    }
+
+    private struct AIErrorResponse: Decodable {
+        let error: ErrorInfo
+
+        struct ErrorInfo: Decodable {
+            let message: String
+        }
     }
 }
