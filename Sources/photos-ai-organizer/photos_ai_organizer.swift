@@ -1071,8 +1071,8 @@ final class TravelClusterAnalyzer {
         let city = place.cityName
         let region = place.regionName
         let country = place.countryName ?? place.description
-        let baselineCountry = cluster.baselineCountryCode?.uppercased()
-        let clusterCountry = cluster.countryCode?.uppercased()
+        let baselineCountry = cluster.baselineCountryCode?.uppercased() ?? baselinePlace?.countryCode?.uppercased()
+        let clusterCountry = (cluster.countryCode ?? place.countryCode)?.uppercased()
         if let baselineCountry, let clusterCountry, baselineCountry == clusterCountry {
             if let baselineRegion = baselinePlace?.regionName,
                let region = region,
@@ -1390,6 +1390,13 @@ final class MapboxGeocoder {
     func placeInfo(for coordinate: CLLocationCoordinate2D, connection: Connection) throws -> PlaceInfo? {
         let key = cacheKey(for: coordinate)
         if let cached = try lookupCachedPlace(key: key, connection: connection) {
+            // legacy cache rows did not store region/city; refresh so domestic naming works
+            if cached.regionName == nil && cached.cityName == nil {
+                if let refreshed = try fetchFromAPI(for: coordinate) {
+                    try storeCachedPlace(key: key, place: refreshed, connection: connection)
+                    return refreshed
+                }
+            }
             return cached
         }
         guard let fetched = try fetchFromAPI(for: coordinate) else { return nil }
@@ -1404,7 +1411,7 @@ final class MapboxGeocoder {
     }
 
     private func lookupCachedPlace(key: (lat: Int, lon: Int), connection: Connection) throws -> PlaceInfo? {
-        let sql = "SELECT place_name, country_code, country_name FROM \(tableName) WHERE lat_key = $1 AND lon_key = $2 LIMIT 1;"
+        let sql = "SELECT place_name, country_code, country_name, region_name, city_name FROM \(tableName) WHERE lat_key = $1 AND lon_key = $2 LIMIT 1;"
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
         let cursor = try statement.execute(parameterValues: [key.lat, key.lon])
