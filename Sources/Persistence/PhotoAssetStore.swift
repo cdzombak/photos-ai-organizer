@@ -5,6 +5,15 @@ import PostgresClientKit
 
 public final class PhotoAssetStore {
     private let config: PostgresConfig
+    private let allowedNonGeoUTIs: [String] = [
+        "public.jpeg",
+        "public.heic",
+        "public.heif",
+        "public.camera-raw-image",
+        "com.apple.raw-image",
+        "com.adobe.raw-image",
+        "public.dng"
+    ]
 
     public init(config: PostgresConfig) {
         self.config = config
@@ -42,7 +51,7 @@ public final class PhotoAssetStore {
 
     public func nonGeotaggedAssetIDs(connection: Connection, windowStart: Date, windowEnd: Date) throws -> [String] {
         let sql = """
-        SELECT asset_id
+        SELECT asset_id, uniform_type_identifier
         FROM \(config.tableName)
         WHERE (location_latitude IS NULL OR location_longitude IS NULL)
           AND creation_date >= $1
@@ -57,9 +66,13 @@ public final class PhotoAssetStore {
         var ids: [String] = []
         for row in cursor {
             let resolved = try row.get()
-            if let assetID = try resolved.columns[0].optionalString(), !assetID.isEmpty {
-                ids.append(assetID)
-            }
+            guard
+                let assetID = try resolved.columns[0].optionalString(),
+                !assetID.isEmpty,
+                let uti = try resolved.columns[1].optionalString(),
+                allowedNonGeoUTIs.contains(where: { $0.caseInsensitiveCompare(uti) == .orderedSame })
+            else { continue }
+            ids.append(assetID)
         }
         return ids
     }
