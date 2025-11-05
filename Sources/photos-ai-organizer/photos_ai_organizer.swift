@@ -724,11 +724,11 @@ final class TravelClusterAnalyzer {
     private let config: PostgresConfig
     private let mapboxConfig: MapboxConfig?
     private let calendar = Calendar(identifier: .gregorian)
-    private let baselineWindowMonths = 2
+    private let baselineWindowMonths = 4
     private let baselineStepMonths = 2
-    private let travelDistanceThresholdMeters = 50_000.0
+    private let travelDistanceThresholdMeters = 60_000.0
     private let clusterMergeDistanceMeters = 200_000.0
-    private let binSizeMeters = 5_000.0
+    private let binSizeMeters = 10_000.0
     private let minimumPhotosPerCluster = 5
     private let minimumTravelDays = 2
     private let awayTolerance = 0.95 // fraction of samples that must be away from baseline
