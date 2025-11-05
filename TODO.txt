@@ -8,7 +8,8 @@ AGENTS: DO NOT TOUCH THIS FILE
 
 ## travel pipeline
 
-- integrate non-geocoded photos within the time window
+- album naming
+- test & fine tune
 
 ## visit (face) pipeline
 
@@ -34,4 +35,4 @@ simple algorithm
 
 ## Others
 
-brute-force LLM approach with albums query, tracking which photos are/aren't in which albums
+brute-force LLM approach with albums query, tracking which photos are/aren't in which albums. Ask LLM for photographic quality score, though, including quality and composition factors, and only keep 4/5 or 5/5 in thematic albums.

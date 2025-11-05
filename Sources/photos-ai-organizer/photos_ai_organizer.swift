@@ -119,6 +119,7 @@ struct PostgresConfig {
     let authMethod: AuthMethod
     let mapbox: MapboxConfig?
     let albumFolderName: String?
+    let albumNamePattern: String?
 
     enum AuthMethod: Decodable {
         case auto
@@ -187,7 +188,8 @@ struct PostgresConfig {
             tableName: tableName,
             authMethod: postgres.authMethod ?? .auto,
             mapbox: rawConfig.mapbox,
-            albumFolderName: rawConfig.albums?.folderName ?? "Travel Clusters"
+            albumFolderName: rawConfig.albums?.folderName ?? rawConfig.albums?.pattern ?? "Travel Clusters",
+            albumNamePattern: rawConfig.albums?.pattern
         )
     }
 
@@ -268,9 +270,11 @@ struct MapboxConfig: Decodable {
 
 struct AlbumConfig: Decodable {
     let folderName: String?
+    let pattern: String?
 
     private enum CodingKeys: String, CodingKey {
         case folderName = "folder_name"
+        case pattern
     }
 }
 
@@ -565,6 +569,7 @@ struct TravelCluster {
     let windowEnd: Date
     let centroid: CLLocationCoordinate2D
     let photoCount: Int
+    let geoPhotoCount: Int
     let medianDistanceMeters: Double
     let locationDescription: String?
     let countryCode: String?
@@ -572,6 +577,7 @@ struct TravelCluster {
     let baselineCountryCode: String?
     let clusterID: String?
     let assetIDs: [String]
+    let windowID: Int
 
     func withLocationInfo(description: String?, countryCode: String?, countryName: String?) -> TravelCluster {
         TravelCluster(
@@ -579,13 +585,15 @@ struct TravelCluster {
             windowEnd: windowEnd,
             centroid: centroid,
             photoCount: photoCount,
+            geoPhotoCount: geoPhotoCount,
             medianDistanceMeters: medianDistanceMeters,
             locationDescription: description,
             countryCode: countryCode,
             countryName: countryName,
             baselineCountryCode: baselineCountryCode,
             clusterID: clusterID,
-            assetIDs: assetIDs
+            assetIDs: assetIDs,
+            windowID: windowID
         )
     }
 
@@ -595,13 +603,15 @@ struct TravelCluster {
             windowEnd: windowEnd,
             centroid: centroid,
             photoCount: photoCount,
+            geoPhotoCount: geoPhotoCount,
             medianDistanceMeters: medianDistanceMeters,
             locationDescription: locationDescription,
             countryCode: countryCode,
             countryName: countryName,
             baselineCountryCode: baselineCode,
             clusterID: clusterID,
-            assetIDs: assetIDs
+            assetIDs: assetIDs,
+            windowID: windowID
         )
     }
 
@@ -611,18 +621,39 @@ struct TravelCluster {
             windowEnd: windowEnd,
             centroid: centroid,
             photoCount: photoCount,
+            geoPhotoCount: geoPhotoCount,
             medianDistanceMeters: medianDistanceMeters,
             locationDescription: locationDescription,
             countryCode: countryCode,
             countryName: countryName,
             baselineCountryCode: baselineCountryCode,
             clusterID: id,
-            assetIDs: assetIDs
+            assetIDs: assetIDs,
+            windowID: windowID
+        )
+    }
+
+    func withAssets(totalCount: Int, assets: [String]) -> TravelCluster {
+        TravelCluster(
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            centroid: centroid,
+            photoCount: totalCount,
+            geoPhotoCount: geoPhotoCount,
+            medianDistanceMeters: medianDistanceMeters,
+            locationDescription: locationDescription,
+            countryCode: countryCode,
+            countryName: countryName,
+            baselineCountryCode: baselineCountryCode,
+            clusterID: clusterID,
+            assetIDs: assets,
+            windowID: windowID
         )
     }
 }
 
 struct TravelWindow {
+    let id: Int
     let startDate: Date
     let endDate: Date
     let samples: [PhotoSample]
@@ -643,15 +674,14 @@ final class TravelClusterAnalyzer {
     private let config: PostgresConfig
     private let mapboxConfig: MapboxConfig?
     private let calendar = Calendar(identifier: .gregorian)
-    private let baselineWindowMonths = 2
-    private let baselineStepMonths = 1
+    private let baselineWindowMonths = 8
+    private let baselineStepMonths = 4
     private let travelDistanceThresholdMeters = 50_000.0
     private let clusterMergeDistanceMeters = 200_000.0
-    private let binSizeMeters = 10_000.0
-    private let minimumPhotosPerCluster = 3
+    private let binSizeMeters = 5_000.0
+    private let minimumPhotosPerCluster = 5
     private let minimumTravelDays = 2
     private let awayTolerance = 0.95 // fraction of samples that must be away from baseline
-    private let countryMergeGapSeconds: TimeInterval = 172_800 // 2 days
 
     init(config: PostgresConfig) {
         self.config = config
@@ -662,7 +692,7 @@ final class TravelClusterAnalyzer {
         let connection = try Connection(configuration: config.makeConnectionConfiguration())
         defer { connection.close() }
 
-        let samples = try fetchSamples(connection: connection)
+        let samples = try fetchGeotaggedSamples(connection: connection)
         guard !samples.isEmpty else { return "No travel data available." }
 
         let baselines = computeBaselines(samples: samples)
@@ -673,7 +703,7 @@ final class TravelClusterAnalyzer {
 
         var rawClusters: [TravelCluster] = []
         for window in travelWindows {
-            let windowClusters = buildClusters(for: window.samples, windowStart: window.startDate, windowEnd: window.endDate)
+            let windowClusters = buildClusters(for: window)
             rawClusters.append(contentsOf: windowClusters)
         }
 
@@ -687,9 +717,10 @@ final class TravelClusterAnalyzer {
         let annotated = try annotateClusters(merged, baselines: baselines, connection: connection, geocoder: geocoder)
         let countryMerged = mergeCountryClusters(annotated)
         let identified = assignClusterIDs(countryMerged)
-        try persistClusters(identified, connection: connection)
-        try removeStaleClusters(keeping: Set(identified.compactMap { $0.clusterID }), connection: connection)
-        let sorted = identified.sorted { lhs, rhs in
+        let enriched = try enrichClustersWithNonGeotaggedPhotos(identified, connection: connection)
+        try persistClusters(enriched, connection: connection)
+        try removeStaleClusters(keeping: Set(enriched.compactMap { $0.clusterID }), connection: connection)
+        let sorted = enriched.sorted { lhs, rhs in
             if lhs.windowStart == rhs.windowStart {
                 return lhs.photoCount > rhs.photoCount
             }
@@ -698,7 +729,7 @@ final class TravelClusterAnalyzer {
         return travelSummary(for: sorted)
     }
 
-    private func fetchSamples(connection: Connection) throws -> [PhotoSample] {
+    private func fetchGeotaggedSamples(connection: Connection) throws -> [PhotoSample] {
         let sql = """
         SELECT asset_id, creation_date, location_latitude, location_longitude
         FROM \(config.tableName)
@@ -780,6 +811,7 @@ final class TravelClusterAnalyzer {
         var currentStart: Date?
         var lastDay: Date?
         var dayCount = 0
+        var nextWindowID = 0
 
         func finalizeWindow() {
             guard let start = currentStart, let last = lastDay else {
@@ -791,7 +823,9 @@ final class TravelClusterAnalyzer {
             }
             if dayCount >= minimumTravelDays {
                 guard let end = calendar.date(byAdding: .day, value: 1, to: last) else { return }
-                windows.append(TravelWindow(startDate: start, endDate: end, samples: currentSamples))
+                let capturedSamples = currentSamples
+                windows.append(TravelWindow(id: nextWindowID, startDate: start, endDate: end, samples: capturedSamples))
+                nextWindowID += 1
             }
             currentSamples = []
             currentStart = nil
@@ -837,25 +871,27 @@ final class TravelClusterAnalyzer {
         return fractionAway >= awayTolerance
     }
 
-    private func buildClusters(for samples: [PhotoSample], windowStart: Date, windowEnd: Date) -> [TravelCluster] {
-        let grouped = Dictionary(grouping: samples, by: { binKey(for: $0.coordinate) })
+    private func buildClusters(for window: TravelWindow) -> [TravelCluster] {
+        let grouped = Dictionary(grouping: window.samples, by: { binKey(for: $0.coordinate) })
         var clusters: [TravelCluster] = []
         for (_, sampleGroup) in grouped {
             guard sampleGroup.count >= minimumPhotosPerCluster else { continue }
             let center = centroid(of: sampleGroup)
             let medianDistance = medianDistanceMeters(of: sampleGroup, center: center)
             clusters.append(TravelCluster(
-                windowStart: windowStart,
-                windowEnd: windowEnd,
+                windowStart: window.startDate,
+                windowEnd: window.endDate,
                 centroid: center,
                 photoCount: sampleGroup.count,
+                geoPhotoCount: sampleGroup.count,
                 medianDistanceMeters: medianDistance,
                 locationDescription: nil,
                 countryCode: nil,
                 countryName: nil,
                 baselineCountryCode: nil,
                 clusterID: nil,
-                assetIDs: sampleGroup.map { $0.assetID }
+                assetIDs: sampleGroup.map { $0.assetID },
+                windowID: window.id
             ))
         }
         return clusters
@@ -869,7 +905,7 @@ final class TravelClusterAnalyzer {
         for cluster in clusters.dropFirst() {
             let gap = cluster.windowStart.timeIntervalSince(current.windowEnd)
             let withinDistance = distanceMeters(cluster.centroid, current.centroid) <= clusterMergeDistanceMeters
-            if gap <= 86400 && withinDistance {
+            if current.windowID == cluster.windowID && gap <= 86400 && withinDistance {
                 current = combineClusters(current, cluster)
             } else {
                 merged.append(current)
@@ -882,53 +918,75 @@ final class TravelClusterAnalyzer {
 
     private func mergeCountryClusters(_ clusters: [TravelCluster]) -> [TravelCluster] {
         guard !clusters.isEmpty else { return [] }
+        let groupedByWindow = Dictionary(grouping: clusters) { $0.windowID }
         var merged: [TravelCluster] = []
-        var current = clusters[0]
 
-        for cluster in clusters.dropFirst() {
-            if shouldMergeByCountry(current, cluster) {
-                current = combineClusters(current, cluster)
-            } else {
-                merged.append(current)
-                current = cluster
+        for (_, windowClusters) in groupedByWindow {
+            let countries = Dictionary(grouping: windowClusters) { $0.countryCode ?? "_unknown" }
+            for (_, group) in countries {
+                guard let countryCode = group.first?.countryCode else {
+                    merged.append(contentsOf: group)
+                    continue
+                }
+                let baselineCode = group.first?.baselineCountryCode
+                if countryCode == baselineCode || group.count == 1 {
+                    merged.append(contentsOf: group)
+                } else {
+                    merged.append(combineClusterGroup(group))
+                }
             }
         }
-        merged.append(current)
-        return merged
-    }
 
-    private func shouldMergeByCountry(_ lhs: TravelCluster, _ rhs: TravelCluster) -> Bool {
-        guard
-            let country = lhs.countryCode,
-            let otherCountry = rhs.countryCode,
-            country == otherCountry,
-            country != lhs.baselineCountryCode,
-            otherCountry != rhs.baselineCountryCode
-        else { return false }
-        let overlap = rhs.windowStart <= lhs.windowEnd && rhs.windowEnd >= lhs.windowStart
-        let gap = rhs.windowStart.timeIntervalSince(lhs.windowEnd)
-        return overlap || gap <= countryMergeGapSeconds
+        return merged.sorted { $0.windowStart < $1.windowStart }
     }
 
     private func combineClusters(_ lhs: TravelCluster, _ rhs: TravelCluster) -> TravelCluster {
+        precondition(lhs.windowID == rhs.windowID, "Cannot merge clusters from different windows")
+        let totalGeo = lhs.geoPhotoCount + rhs.geoPhotoCount
         let totalCount = lhs.photoCount + rhs.photoCount
-        let weightedLat = (lhs.centroid.latitude * Double(lhs.photoCount) + rhs.centroid.latitude * Double(rhs.photoCount)) / Double(totalCount)
-        let weightedLon = (lhs.centroid.longitude * Double(lhs.photoCount) + rhs.centroid.longitude * Double(rhs.photoCount)) / Double(totalCount)
+        let weightedLat = (lhs.centroid.latitude * Double(lhs.geoPhotoCount) + rhs.centroid.latitude * Double(rhs.geoPhotoCount)) / Double(max(totalGeo, 1))
+        let weightedLon = (lhs.centroid.longitude * Double(lhs.geoPhotoCount) + rhs.centroid.longitude * Double(rhs.geoPhotoCount)) / Double(max(totalGeo, 1))
         let countryName = lhs.countryName ?? rhs.countryName
-        let locationDescription = countryName ?? lhs.locationDescription ?? rhs.locationDescription
+        let locationDescription = lhs.locationDescription ?? rhs.locationDescription
         return TravelCluster(
             windowStart: min(lhs.windowStart, rhs.windowStart),
             windowEnd: max(lhs.windowEnd, rhs.windowEnd),
             centroid: CLLocationCoordinate2D(latitude: weightedLat, longitude: weightedLon),
             photoCount: totalCount,
+            geoPhotoCount: totalGeo,
             medianDistanceMeters: max(lhs.medianDistanceMeters, rhs.medianDistanceMeters),
             locationDescription: locationDescription,
             countryCode: lhs.countryCode ?? rhs.countryCode,
             countryName: countryName,
             baselineCountryCode: lhs.baselineCountryCode ?? rhs.baselineCountryCode,
             clusterID: nil,
-            assetIDs: lhs.assetIDs + rhs.assetIDs
+            assetIDs: lhs.assetIDs + rhs.assetIDs,
+            windowID: lhs.windowID
         )
+    }
+
+    private func combineClusterGroup(_ clusters: [TravelCluster]) -> TravelCluster {
+        guard var combined = clusters.first else { fatalError("Empty cluster group") }
+        for cluster in clusters.dropFirst() {
+            combined = combineClusters(combined, cluster)
+        }
+        let countryName = combined.countryName ?? combined.locationDescription
+        combined = TravelCluster(
+            windowStart: combined.windowStart,
+            windowEnd: combined.windowEnd,
+            centroid: combined.centroid,
+            photoCount: combined.photoCount,
+            geoPhotoCount: combined.geoPhotoCount,
+            medianDistanceMeters: combined.medianDistanceMeters,
+            locationDescription: countryName,
+            countryCode: combined.countryCode,
+            countryName: countryName,
+            baselineCountryCode: combined.baselineCountryCode,
+            clusterID: nil,
+            assetIDs: combined.assetIDs,
+            windowID: combined.windowID
+        )
+        return combined
     }
 
     private func averageCentroid(current: TravelCluster, next: TravelCluster) -> CLLocationCoordinate2D {
@@ -984,12 +1042,14 @@ final class TravelClusterAnalyzer {
             centroid_lat DOUBLE PRECISION NOT NULL,
             centroid_lon DOUBLE PRECISION NOT NULL,
             photo_count INTEGER NOT NULL,
+            geo_photo_count INTEGER NOT NULL DEFAULT 0,
             median_distance_m DOUBLE PRECISION NOT NULL DEFAULT 0,
             country_code TEXT,
             country_name TEXT,
             baseline_country_code TEXT,
             location_description TEXT,
-            computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            album_local_id TEXT
         );
         """
         let statement = try connection.prepareStatement(text: sql)
@@ -1000,7 +1060,9 @@ final class TravelClusterAnalyzer {
             "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS median_distance_m DOUBLE PRECISION NOT NULL DEFAULT 0;",
             "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS country_code TEXT;",
             "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS country_name TEXT;",
-            "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS baseline_country_code TEXT;"
+            "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS baseline_country_code TEXT;",
+            "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS geo_photo_count INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS album_local_id TEXT;"
         ]
         for alter in alterStatements {
             let alterStatement = try connection.prepareStatement(text: alter)
@@ -1025,14 +1087,15 @@ final class TravelClusterAnalyzer {
     private func persistClusters(_ clusters: [TravelCluster], connection: Connection) throws {
         let sql = """
         INSERT INTO travel_clusters (
-            cluster_id, window_start, window_end, centroid_lat, centroid_lon, photo_count, median_distance_m, country_code, country_name, baseline_country_code, location_description, computed_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+            cluster_id, window_start, window_end, centroid_lat, centroid_lon, photo_count, geo_photo_count, median_distance_m, country_code, country_name, baseline_country_code, location_description, computed_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
         ON CONFLICT (cluster_id) DO UPDATE SET
             window_start = EXCLUDED.window_start,
             window_end = EXCLUDED.window_end,
             centroid_lat = EXCLUDED.centroid_lat,
             centroid_lon = EXCLUDED.centroid_lon,
             photo_count = EXCLUDED.photo_count,
+            geo_photo_count = EXCLUDED.geo_photo_count,
             median_distance_m = EXCLUDED.median_distance_m,
             country_code = EXCLUDED.country_code,
             country_name = EXCLUDED.country_name,
@@ -1051,6 +1114,7 @@ final class TravelClusterAnalyzer {
                 cluster.centroid.latitude,
                 cluster.centroid.longitude,
                 cluster.photoCount,
+                cluster.geoPhotoCount,
                 cluster.medianDistanceMeters,
                 cluster.countryCode,
                 cluster.countryName,
@@ -1075,6 +1139,43 @@ final class TravelClusterAnalyzer {
         for assetID in Set(assetIDs) {
             try insertStatement.execute(parameterValues: [clusterID, assetID])
         }
+    }
+
+    private func enrichClustersWithNonGeotaggedPhotos(_ clusters: [TravelCluster], connection: Connection) throws -> [TravelCluster] {
+        guard !clusters.isEmpty else { return [] }
+        let sql = """
+        SELECT asset_id
+        FROM \(config.tableName)
+        WHERE (location_latitude IS NULL OR location_longitude IS NULL)
+          AND creation_date >= $1
+          AND creation_date < $2;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        var enriched: [TravelCluster] = []
+        for cluster in clusters {
+            let cursor = try statement.execute(parameterValues: [
+                PostgresTimestampWithTimeZone(date: cluster.windowStart),
+                PostgresTimestampWithTimeZone(date: cluster.windowEnd)
+            ])
+            var assetSet = Set(cluster.assetIDs)
+            var newCount = 0
+            for row in cursor {
+                let resolved = try row.get()
+                if let assetID = try resolved.columns[0].optionalString(), !assetID.isEmpty, !assetSet.contains(assetID) {
+                    assetSet.insert(assetID)
+                    newCount += 1
+                }
+            }
+            if newCount == 0 {
+                enriched.append(cluster)
+            } else {
+                let totalCount = assetSet.count
+                enriched.append(cluster.withAssets(totalCount: totalCount, assets: Array(assetSet)))
+            }
+        }
+        return enriched
     }
 
     private func travelSummary(for clusters: [TravelCluster]) -> String {
@@ -1328,6 +1429,8 @@ struct StoredCluster {
     let id: String
     let windowStart: Date
     let windowEnd: Date
+    let centroid: CLLocationCoordinate2D
+    let geoPhotoCount: Int
     let countryName: String?
     let locationDescription: String?
     let albumLocalID: String?
@@ -1337,11 +1440,13 @@ struct StoredCluster {
 final class TravelAlbumSynchronizer {
     private let config: PostgresConfig
     private let folderName: String
+    private let namePattern: String
     private let dateFormatter: DateFormatter
 
     init(config: PostgresConfig) {
         self.config = config
         self.folderName = config.albumFolderName ?? "Travel Clusters"
+        self.namePattern = config.albumNamePattern ?? "{location} {start} – {end}"
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
@@ -1371,7 +1476,7 @@ final class TravelAlbumSynchronizer {
 
     private func fetchClusters(connection: Connection) throws -> [StoredCluster] {
         let sql = """
-        SELECT cluster_id, window_start, window_end, country_name, location_description, album_local_id
+        SELECT cluster_id, window_start, window_end, centroid_lat, centroid_lon, photo_count, geo_photo_count, country_name, location_description, album_local_id
         FROM travel_clusters
         ORDER BY window_start ASC;
         """
@@ -1389,14 +1494,20 @@ final class TravelAlbumSynchronizer {
             else {
                 continue
             }
-            let country = try resolved.columns[3].optionalString()
-            let location = try resolved.columns[4].optionalString()
-            let albumID = try resolved.columns[5].optionalString()
+            let lat = try resolved.columns[3].double()
+            let lon = try resolved.columns[4].double()
+            _ = try resolved.columns[5].int()
+            let geoCount = try resolved.columns[6].int()
+            let country = try resolved.columns[7].optionalString()
+            let location = try resolved.columns[8].optionalString()
+            let albumID = try resolved.columns[9].optionalString()
             let assetIDs = try fetchAssetIDs(for: clusterID, connection: connection)
             clusters.append(StoredCluster(
                 id: clusterID,
                 windowStart: start,
                 windowEnd: end,
+                centroid: CLLocationCoordinate2D(latitude: lat, longitude: lon),
+                geoPhotoCount: geoCount,
                 countryName: country,
                 locationDescription: location,
                 albumLocalID: albumID,
@@ -1422,10 +1533,14 @@ final class TravelAlbumSynchronizer {
     }
 
     private func albumTitle(for cluster: StoredCluster) -> String {
-        let name = cluster.countryName ?? cluster.locationDescription ?? "Travel"
+        let location = cluster.locationDescription ?? cluster.countryName ?? "Travel"
         let start = dateFormatter.string(from: cluster.windowStart)
         let end = dateFormatter.string(from: cluster.windowEnd)
-        return "\(name) \(start) – \(end)"
+        return namePattern
+            .replacingOccurrences(of: "{location}", with: location)
+            .replacingOccurrences(of: "{country}", with: cluster.countryName ?? location)
+            .replacingOccurrences(of: "{start}", with: start)
+            .replacingOccurrences(of: "{end}", with: end)
     }
 
     private func ensureFolder() throws -> PHCollectionList {

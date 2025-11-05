@@ -10,3 +10,4 @@ mapbox:
   access_token: pk.your-token-here
 albums:
   folder_name: Travel Clusters
+  pattern: "{location} {start} – {end}"
