@@ -11,3 +11,7 @@ mapbox:
 albums:
   folder_name: Travel Clusters
   pattern: "{location} {start} – {end}"
+ai:
+  base_url: https://api.openai.com
+  api_key: sk-your-key
+  model: gpt-4o-mini

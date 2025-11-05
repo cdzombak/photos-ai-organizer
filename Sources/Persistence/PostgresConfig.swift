@@ -15,6 +15,7 @@ public struct PostgresConfig {
     public let mapbox: MapboxConfig?
     public let albumFolderName: String?
     public let albumNamePattern: String?
+    public let ai: AIConfig?
 
     public enum AuthMethod: Decodable {
         case auto
@@ -43,7 +44,7 @@ public struct PostgresConfig {
         }
     }
 
-    public static func fromConfigFile(path: String, tableOverride: String?, fileManager: FileManager = .default) throws -> PostgresConfig {
+    public static func fromConfigFile(path: String, tableOverride: String? = nil, fileManager: FileManager = .default) throws -> PostgresConfig {
         let configURL = resolveConfigURL(path: path, fileManager: fileManager)
         guard fileManager.fileExists(atPath: configURL.path) else {
             throw ExportError.missingConfigFile(configURL.path)
@@ -84,7 +85,8 @@ public struct PostgresConfig {
             authMethod: postgres.authMethod ?? .auto,
             mapbox: rawConfig.mapbox,
             albumFolderName: rawConfig.albums?.folderName ?? "Travel Clusters",
-            albumNamePattern: rawConfig.albums?.pattern
+            albumNamePattern: rawConfig.albums?.pattern,
+            ai: rawConfig.ai
         )
     }
 
@@ -152,6 +154,7 @@ public struct PostgresConfig {
         public let postgres: Postgres
         public let mapbox: MapboxConfig?
         public let albums: AlbumConfig?
+        public let ai: AIConfig?
     }
 }
 
@@ -170,5 +173,17 @@ public struct AlbumConfig: Decodable {
     enum CodingKeys: String, CodingKey {
         case folderName = "folder_name"
         case pattern
+    }
+}
+
+public struct AIConfig: Decodable {
+    public let baseURL: URL
+    public let apiKey: String
+    public let model: String
+
+    enum CodingKeys: String, CodingKey {
+        case baseURL = "base_url"
+        case apiKey = "api_key"
+        case model
     }
 }

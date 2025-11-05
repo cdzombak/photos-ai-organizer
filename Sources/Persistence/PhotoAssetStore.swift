@@ -4,8 +4,7 @@ import CoreLocation
 import PostgresClientKit
 
 public final class PhotoAssetStore {
-    private let config: PostgresConfig
-    private let allowedNonGeoUTIs: [String] = [
+    public static let allowedUngradedUTIs: [String] = [
         "public.jpeg",
         "public.heic",
         "public.heif",
@@ -14,6 +13,8 @@ public final class PhotoAssetStore {
         "com.adobe.raw-image",
         "public.dng"
     ]
+
+    private let config: PostgresConfig
 
     public init(config: PostgresConfig) {
         self.config = config
@@ -70,7 +71,7 @@ public final class PhotoAssetStore {
                 let assetID = try resolved.columns[0].optionalString(),
                 !assetID.isEmpty,
                 let uti = try resolved.columns[1].optionalString(),
-                allowedNonGeoUTIs.contains(where: { $0.caseInsensitiveCompare(uti) == .orderedSame })
+                PhotoAssetStore.allowedUngradedUTIs.contains(where: { $0.caseInsensitiveCompare(uti) == .orderedSame })
             else { continue }
             ids.append(assetID)
         }

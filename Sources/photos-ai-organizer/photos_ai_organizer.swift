@@ -45,6 +45,7 @@ enum CLICommand: String {
     case `import` = "import"
     case runTravelPipeline = "run-travel-pipeline"
     case syncTravelAlbums = "sync-travel-albums"
+    case grade = "grade"
     case help = "help"
 }
 
@@ -86,9 +87,7 @@ struct CLIOptions {
             index = args.index(after: index)
         }
 
-        let resolvedCommand = command ?? .help
-
-        self.command = resolvedCommand
+        self.command = command ?? .help
         self.configPath = configPath
     }
 }
@@ -467,7 +466,7 @@ struct PhotosMetadataExporterCLI {
     static func main() {
         do {
             let options = try CLIOptions(arguments: CommandLine.arguments)
-            let config = try PostgresConfig.fromConfigFile(path: options.configPath, tableOverride: nil)
+            let config = try PostgresConfig.fromConfigFile(path: options.configPath)
             let exporter = PhotoMetadataExporter(config: config)
             switch options.command {
             case .import:
@@ -481,6 +480,10 @@ struct PhotosMetadataExporterCLI {
             case .syncTravelAlbums:
                 let syncer = TravelAlbumSynchronizer(config: config)
                 let summary = try syncer.run()
+                print(summary)
+            case .grade:
+                let grader = PhotoGradeCommand(config: config)
+                let summary = try grader.run()
                 print(summary)
             case .help:
                 printHelp()
@@ -504,6 +507,7 @@ SUBCOMMANDS:
   import               Scan Photos and upsert metadata into Postgres.
   run-travel-pipeline  Build/annotate travel clusters and persist results.
   sync-travel-albums   Mirror stored clusters into Photos albums.
+  grade                Send Photos to an AI model for 0–10 quality grading.
   help                 Show this message.
 
 OPTIONS:

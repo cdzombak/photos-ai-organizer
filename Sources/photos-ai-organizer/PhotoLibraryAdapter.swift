@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 @preconcurrency import Photos
 import Core
 
@@ -114,6 +116,45 @@ struct PhotoLibraryAdapter {
             }
         }
         return found
+    }
+}
+
+extension PhotoLibraryAdapter {
+    func fetchAssets(with identifiers: [String]) -> [PHAsset] {
+        guard !identifiers.isEmpty else { return [] }
+        let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
+        var assets: [PHAsset] = []
+        fetchResult.enumerateObjects { asset, _, _ in
+            assets.append(asset)
+        }
+        return assets
+    }
+
+    func resizedImageData(for asset: PHAsset, maxDimension: CGFloat) -> Data? {
+        let options = PHImageRequestOptions()
+        options.isSynchronous = true
+        options.deliveryMode = .highQualityFormat
+        var data: Data?
+        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { originalData, _, _, _ in
+            guard let originalData else { return }
+            data = resizeImageData(originalData, maxDimension: maxDimension)
+        }
+        return data
+    }
+
+    private func resizeImageData(_ data: Data, maxDimension: CGFloat) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [NSString: Any] = [
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(maxDimension)
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let destinationData = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(destinationData, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, cgImage, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return destinationData as Data
     }
 }
 

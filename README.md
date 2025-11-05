@@ -9,6 +9,7 @@ Swift CLI that syncs Apple Photos metadata into PostgreSQL and analyzes it to or
 
 - `help` – show CLI usage and options.
 - `import` – scan Photos and upsert asset metadata into Postgres.
+- `grade` – ask an AI model to rate all photos 0–10.
 
 Global flags: `--config <file>` (defaults to `photos-config.yml`), `--help`/`-h`.
 
@@ -20,6 +21,13 @@ Global flags: `--config <file>` (defaults to `photos-config.yml`), `--help`/`-h`
 
 Configuration is via a YAML file. This must be passed to the program with the `--config <file>` flag. See [photos-config.example.yml](photos-config.example.yml) for an example configuration file.
 
+Key sections:
+
+- `postgres`: connection info + metadata table name
+- `mapbox`: access token for travel geocoding (optional if you skip travel pipeline)
+- `albums`: folder/name pattern for synced albums
+- `ai`: `base_url`, `api_key`, `model` for the OpenAI-compatible service used by the `grade` subcommand
+
 ## Quickstart
 
 ```bash
@@ -27,6 +35,7 @@ swift run photos-ai-organizer import  --config photos-config.yml
 
 swift run photos-ai-organizer run-travel-pipeline  --config photos-config.yml
 swift run photos-ai-organizer sync-travel-albums  --config photos-config.yml
+swift run photos-ai-organizer grade --config photos-config.yml
 ```
 
 ## Import Process
@@ -75,9 +84,13 @@ Future support for thematic analysis is planned, to help you collect your best p
 
 ### thematic pipeline
 
-This will be a single pipeline that asks an LLM to grade each image considering a number of factors (image quality, composition, etc.) where 5 is a museum-quality image. If the grade is high enough (configurable), it will ask whether the image belongs in any of a (configurable) set of albums. Contextual information/metadata will be provided to help with decision making.
+This will be a single pipeline that asks an LLM to grade each image considering a number of factors (image quality, composition, etc.). (Grading can be performed ahead of time.) If the grade is high enough (configurable), it will ask whether the image belongs in any of a (configurable) set of albums. Contextual information/metadata will be provided to help with decision making.
 
 All LLM results are cached in the database to avoid repeated calls.
+
+#### grade-preview UI
+
+We'll need some sort of interactive preview UI allowing the user to see a set of photos for each grade.
 
 ## License
 
