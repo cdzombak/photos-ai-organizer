@@ -6,3 +6,6 @@ postgres:
   password: photos
   ssl: false
   auth_method: auto
+
+mapbox:
+  access_token: pk.your-token-here
