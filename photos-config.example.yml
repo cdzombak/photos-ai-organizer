@@ -6,6 +6,7 @@ postgres:
   password: photos
   ssl: false
   auth_method: auto
-
 mapbox:
   access_token: pk.your-token-here
+albums:
+  folder_name: Travel Clusters

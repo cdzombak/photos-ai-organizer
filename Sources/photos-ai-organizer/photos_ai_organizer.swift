@@ -41,6 +41,7 @@ enum ExportError: Error, CustomStringConvertible {
 enum CLICommand: String {
     case `import` = "import"
     case runTravelPipeline = "run-travel-pipeline"
+    case syncTravelAlbums = "sync-travel-albums"
 }
 
 struct CLIOptions {
@@ -80,7 +81,7 @@ struct CLIOptions {
                 if command == nil, let parsed = CLICommand(rawValue: argument) {
                     command = parsed
                 } else if command == nil {
-                    throw ExportError.invalidArgument("Unknown subcommand '\(argument)'. Try 'import' or 'run-travel-pipeline'.")
+                    throw ExportError.invalidArgument("Unknown subcommand '\(argument)'. Try 'import', 'run-travel-pipeline', or 'sync-travel-albums'.")
                 } else {
                     throw ExportError.invalidArgument("Unexpected argument '\(argument)'.")
                 }
@@ -117,6 +118,7 @@ struct PostgresConfig {
     let tableName: String
     let authMethod: AuthMethod
     let mapbox: MapboxConfig?
+    let albumFolderName: String?
 
     enum AuthMethod: Decodable {
         case auto
@@ -184,7 +186,8 @@ struct PostgresConfig {
             useSSL: postgres.ssl ?? true,
             tableName: tableName,
             authMethod: postgres.authMethod ?? .auto,
-            mapbox: rawConfig.mapbox
+            mapbox: rawConfig.mapbox,
+            albumFolderName: rawConfig.albums?.folderName ?? "Travel Clusters"
         )
     }
 
@@ -251,6 +254,7 @@ struct PostgresConfig {
 
         let postgres: Postgres
         let mapbox: MapboxConfig?
+        let albums: AlbumConfig?
     }
 }
 
@@ -259,6 +263,14 @@ struct MapboxConfig: Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case accessToken = "access_token"
+    }
+}
+
+struct AlbumConfig: Decodable {
+    let folderName: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case folderName = "folder_name"
     }
 }
 
@@ -274,6 +286,30 @@ final class AuthorizationStatusBox: @unchecked Sendable {
 
 final class DataResultBox: @unchecked Sendable {
     var value: Result<Data, Error>?
+}
+
+enum PhotoLibraryAuthorizer {
+    static func ensureAccess() throws {
+        var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        switch status {
+        case .authorized, .limited:
+            return
+        case .notDetermined:
+            let semaphore = DispatchSemaphore(value: 0)
+            let statusBox = AuthorizationStatusBox(.notDetermined)
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { newStatus in
+                statusBox.value = newStatus
+                semaphore.signal()
+            }
+            semaphore.wait()
+            status = statusBox.value
+            guard status == .authorized || status == .limited else {
+                throw ExportError.authorizationDenied(status)
+            }
+        default:
+            throw ExportError.authorizationDenied(status)
+        }
+    }
 }
 
 final class ProgressReporter {
@@ -361,7 +397,7 @@ final class PhotoMetadataExporter {
     }
 
     func runImport() throws -> ImportResult {
-        try ensurePhotoLibraryAccess()
+        try PhotoLibraryAuthorizer.ensureAccess()
 
         let connectionConfig = try config.makeConnectionConfiguration()
         let connection = try Connection(configuration: connectionConfig)
@@ -386,25 +422,7 @@ final class PhotoMetadataExporter {
     }
 
     private func ensurePhotoLibraryAccess() throws {
-        var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        switch status {
-        case .authorized, .limited:
-            return
-        case .notDetermined:
-            let semaphore = DispatchSemaphore(value: 0)
-            let statusBox = AuthorizationStatusBox(.notDetermined)
-            PHPhotoLibrary.requestAuthorization(for: .readWrite) { newStatus in
-                statusBox.value = newStatus
-                semaphore.signal()
-            }
-            semaphore.wait()
-            status = statusBox.value
-            guard status == .authorized || status == .limited else {
-                throw ExportError.authorizationDenied(status)
-            }
-        default:
-            throw ExportError.authorizationDenied(status)
-        }
+        try PhotoLibraryAuthorizer.ensureAccess()
     }
 
     private func fetchAssets() -> PHFetchResult<PHAsset> {
@@ -625,8 +643,8 @@ final class TravelClusterAnalyzer {
     private let config: PostgresConfig
     private let mapboxConfig: MapboxConfig?
     private let calendar = Calendar(identifier: .gregorian)
-    private let baselineWindowMonths = 8
-    private let baselineStepMonths = 4
+    private let baselineWindowMonths = 2
+    private let baselineStepMonths = 1
     private let travelDistanceThresholdMeters = 50_000.0
     private let clusterMergeDistanceMeters = 200_000.0
     private let binSizeMeters = 10_000.0
@@ -1304,6 +1322,212 @@ struct BinKey: Hashable {
     let lonIndex: Int
 }
 
+// MARK: - Album Sync
+
+struct StoredCluster {
+    let id: String
+    let windowStart: Date
+    let windowEnd: Date
+    let countryName: String?
+    let locationDescription: String?
+    let albumLocalID: String?
+    let assetIDs: [String]
+}
+
+final class TravelAlbumSynchronizer {
+    private let config: PostgresConfig
+    private let folderName: String
+    private let dateFormatter: DateFormatter
+
+    init(config: PostgresConfig) {
+        self.config = config
+        self.folderName = config.albumFolderName ?? "Travel Clusters"
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        self.dateFormatter = formatter
+    }
+
+    func run() throws -> String {
+        try PhotoLibraryAuthorizer.ensureAccess()
+        let connection = try Connection(configuration: config.makeConnectionConfiguration())
+        defer { connection.close() }
+
+        let clusters = try fetchClusters(connection: connection)
+        guard !clusters.isEmpty else { return "No travel clusters to sync." }
+
+        let folder = try ensureFolder()
+        var synced = 0
+        for cluster in clusters {
+            let albumTitle = albumTitle(for: cluster)
+            let album = try ensureAlbum(named: albumTitle, existingIdentifier: cluster.albumLocalID, in: folder)
+            try updateAlbum(album, with: cluster.assetIDs)
+            try updateAlbumIdentifier(album.localIdentifier, for: cluster.id, connection: connection)
+            synced += 1
+        }
+
+        return "Synced \(synced) travel albums into folder '\(folderName)'."
+    }
+
+    private func fetchClusters(connection: Connection) throws -> [StoredCluster] {
+        let sql = """
+        SELECT cluster_id, window_start, window_end, country_name, location_description, album_local_id
+        FROM travel_clusters
+        ORDER BY window_start ASC;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        var clusters: [StoredCluster] = []
+        let cursor = try statement.execute()
+        for row in cursor {
+            let resolved = try row.get()
+            guard
+                let clusterID = try resolved.columns[0].optionalString(),
+                let start = try resolved.columns[1].optionalTimestampWithTimeZone()?.date,
+                let end = try resolved.columns[2].optionalTimestampWithTimeZone()?.date
+            else {
+                continue
+            }
+            let country = try resolved.columns[3].optionalString()
+            let location = try resolved.columns[4].optionalString()
+            let albumID = try resolved.columns[5].optionalString()
+            let assetIDs = try fetchAssetIDs(for: clusterID, connection: connection)
+            clusters.append(StoredCluster(
+                id: clusterID,
+                windowStart: start,
+                windowEnd: end,
+                countryName: country,
+                locationDescription: location,
+                albumLocalID: albumID,
+                assetIDs: assetIDs
+            ))
+        }
+        return clusters
+    }
+
+    private func fetchAssetIDs(for clusterID: String, connection: Connection) throws -> [String] {
+        let sql = "SELECT asset_id FROM travel_cluster_assets WHERE cluster_id = $1;"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        let cursor = try statement.execute(parameterValues: [clusterID])
+        var ids: [String] = []
+        for row in cursor {
+            let resolved = try row.get()
+            if let assetID = try resolved.columns[0].optionalString() {
+                ids.append(assetID)
+            }
+        }
+        return ids
+    }
+
+    private func albumTitle(for cluster: StoredCluster) -> String {
+        let name = cluster.countryName ?? cluster.locationDescription ?? "Travel"
+        let start = dateFormatter.string(from: cluster.windowStart)
+        let end = dateFormatter.string(from: cluster.windowEnd)
+        return "\(name) \(start) – \(end)"
+    }
+
+    private func ensureFolder() throws -> PHCollectionList {
+        if let existing = fetchFolder(named: folderName) {
+            return existing
+        }
+
+        var placeholder: PHObjectPlaceholder?
+        let targetFolderName = folderName
+        try PHPhotoLibrary.shared().performChangesAndWait {
+            let request = PHCollectionListChangeRequest.creationRequestForCollectionList(withTitle: targetFolderName)
+            placeholder = request.placeholderForCreatedCollectionList
+        }
+        guard let id = placeholder?.localIdentifier else {
+            throw ExportError.invalidArgument("Failed to create folder \(folderName).")
+        }
+        guard let folder = fetchFolder(by: id) else {
+            throw ExportError.invalidArgument("Unable to load folder \(folderName).")
+        }
+        return folder
+    }
+
+    private func fetchFolder(named name: String) -> PHCollectionList? {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "title = %@", name)
+        let result = PHCollectionList.fetchCollectionLists(with: .folder, subtype: .any, options: options)
+        return result.firstObject
+    }
+
+    private func fetchFolder(by identifier: String) -> PHCollectionList? {
+        let result = PHCollectionList.fetchCollectionLists(withLocalIdentifiers: [identifier], options: nil)
+        return result.firstObject
+    }
+
+    private func ensureAlbum(named title: String, existingIdentifier: String?, in folder: PHCollectionList) throws -> PHAssetCollection {
+        if let existingID = existingIdentifier,
+           let existingAlbum = fetchAlbum(by: existingID) {
+            return existingAlbum
+        }
+
+        if let existing = fetchAlbum(named: title, in: folder) {
+            return existing
+        }
+
+        var placeholder: PHObjectPlaceholder?
+        try PHPhotoLibrary.shared().performChangesAndWait {
+            let request = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: title)
+            placeholder = request.placeholderForCreatedAssetCollection
+            if let folderChangeRequest = PHCollectionListChangeRequest(for: folder), let albumPlaceholder = placeholder {
+                folderChangeRequest.addChildCollections([albumPlaceholder] as NSArray)
+            }
+        }
+        guard let id = placeholder?.localIdentifier else {
+            throw ExportError.invalidArgument("Unable to create album \(title).")
+        }
+        guard let album = fetchAlbum(by: id) else {
+            throw ExportError.invalidArgument("Unable to load album \(title).")
+        }
+        return album
+    }
+
+    private func fetchAlbum(by identifier: String) -> PHAssetCollection? {
+        let result = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [identifier], options: nil)
+        return result.firstObject
+    }
+
+    private func fetchAlbum(named name: String, in folder: PHCollectionList) -> PHAssetCollection? {
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "title = %@", name)
+        let result = PHCollectionList.fetchCollections(in: folder, options: options)
+        var found: PHAssetCollection?
+        result.enumerateObjects { collection, _, stop in
+            if let album = collection as? PHAssetCollection {
+                found = album
+                stop.pointee = true
+            }
+        }
+        return found
+    }
+
+    private func updateAlbum(_ album: PHAssetCollection, with assetIDs: [String]) throws {
+        let assetsToAdd = PHAsset.fetchAssets(withLocalIdentifiers: assetIDs, options: nil)
+        let existingAssets = PHAsset.fetchAssets(in: album, options: nil)
+        try PHPhotoLibrary.shared().performChangesAndWait {
+            guard let request = PHAssetCollectionChangeRequest(for: album) else { return }
+            if existingAssets.count > 0 {
+                request.removeAssets(existingAssets)
+            }
+            if assetsToAdd.count > 0 {
+                request.addAssets(assetsToAdd)
+            }
+        }
+    }
+
+    private func updateAlbumIdentifier(_ identifier: String, for clusterID: String, connection: Connection) throws {
+        let sql = "UPDATE travel_clusters SET album_local_id = $1 WHERE cluster_id = $2;"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        try statement.execute(parameterValues: [identifier, clusterID])
+    }
+}
+
 // MARK: - Entry Point
 
 @main
@@ -1321,6 +1545,10 @@ struct PhotosMetadataExporterCLI {
             case .runTravelPipeline:
                 let analyzer = TravelClusterAnalyzer(config: config)
                 let summary = try analyzer.run()
+                print(summary)
+            case .syncTravelAlbums:
+                let syncer = TravelAlbumSynchronizer(config: config)
+                let summary = try syncer.run()
                 print(summary)
             }
         } catch {
