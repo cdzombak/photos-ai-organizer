@@ -11,6 +11,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/codewinsdotcom/PostgresClientKit.git", from: "1.5.0"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.0.6"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.64.0")
     ],
     targets: [
         .target(
@@ -52,6 +53,7 @@ let package = Package(
                 "TravelPipeline",
                 .product(name: "PostgresClientKit", package: "PostgresClientKit"),
                 .product(name: "Yams", package: "Yams"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
             ],
             linkerSettings: [
                 .linkedFramework("Photos"),

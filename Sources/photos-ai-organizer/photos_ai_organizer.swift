@@ -46,6 +46,7 @@ enum CLICommand: String {
     case runTravelPipeline = "run-travel-pipeline"
     case syncTravelAlbums = "sync-travel-albums"
     case grade = "grade"
+    case serveGrades = "serve-grades"
     case help = "help"
 }
 
@@ -485,6 +486,9 @@ struct PhotosMetadataExporterCLI {
                 let grader = PhotoGradeCommand(config: config)
                 let summary = try grader.run()
                 print(summary)
+            case .serveGrades:
+                let server = PhotoGradeServer(config: config)
+                try server.run()
             case .help:
                 printHelp()
             }
@@ -508,6 +512,7 @@ SUBCOMMANDS:
   run-travel-pipeline  Build/annotate travel clusters and persist results.
   sync-travel-albums   Mirror stored clusters into Photos albums.
   grade                Send Photos to an AI model for 0–10 quality grading.
+  serve-grades         Run a simple web server previewing graded photos.
   help                 Show this message.
 
 OPTIONS:

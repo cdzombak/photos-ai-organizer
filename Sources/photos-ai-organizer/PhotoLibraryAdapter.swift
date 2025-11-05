@@ -156,6 +156,14 @@ extension PhotoLibraryAdapter {
         guard CGImageDestinationFinalize(destination) else { return nil }
         return destinationData as Data
     }
+
+    func base64JPEG(for assetID: String, maxDimension: CGFloat) -> String? {
+        let assets = fetchAssets(with: [assetID])
+        guard let asset = assets.first, let data = resizedImageData(for: asset, maxDimension: maxDimension) else {
+            return nil
+        }
+        return data.base64EncodedString()
+    }
 }
 
 extension PhotoLibraryAdapter {

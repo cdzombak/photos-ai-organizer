@@ -65,4 +65,30 @@ public final class ImageGradeStore {
         defer { statement.close() }
         try statement.execute(parameterValues: [assetID, grade])
     }
+
+    public func samplesByGrade(limitPerGrade: Int, connection: Connection) throws -> [Int: [String]] {
+        let sql = """
+        SELECT grade, asset_id
+        FROM image_grade
+        WHERE grade IS NOT NULL
+        ORDER BY grade DESC, asset_id ASC;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        let cursor = try statement.execute()
+        var grouped: [Int: [String]] = [:]
+        for row in cursor {
+            let resolved = try row.get()
+            guard
+                let grade = try resolved.columns[0].optionalInt(),
+                let assetID = try resolved.columns[1].optionalString()
+            else { continue }
+            var bucket = grouped[grade] ?? []
+            if bucket.count < limitPerGrade {
+                bucket.append(assetID)
+                grouped[grade] = bucket
+            }
+        }
+        return grouped
+    }
 }
