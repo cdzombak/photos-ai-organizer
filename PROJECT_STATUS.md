@@ -24,3 +24,8 @@ Last Updated: $(date -u +"%Y-%m-%d %H:%M:%SZ")
 - Non-geotagged (DSLR) photos are included in clusters via timestamp window.
 - Album sync command added; naming configurable.
 - Remaining request: confirm merged clusters behave as expected after rerun; monitor for additional duplicates.
+
+## Recent Work (commit 8ea9666)
+- Country-level clusters now pick start/end dates from their own photos, so multi-country trips produce distinct windows per country.
+- Cluster centroid and counts now track geo-only and total photos separately.
+- Non-geotagged photo inclusion uses a single prepared statement per run for efficiency.

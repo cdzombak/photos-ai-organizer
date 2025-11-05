@@ -944,13 +944,15 @@ final class TravelClusterAnalyzer {
         precondition(lhs.windowID == rhs.windowID, "Cannot merge clusters from different windows")
         let totalGeo = lhs.geoPhotoCount + rhs.geoPhotoCount
         let totalCount = lhs.photoCount + rhs.photoCount
+        let startDate = min(lhs.windowStart, rhs.windowStart)
+        let endDate = max(lhs.windowEnd, rhs.windowEnd)
         let weightedLat = (lhs.centroid.latitude * Double(lhs.geoPhotoCount) + rhs.centroid.latitude * Double(rhs.geoPhotoCount)) / Double(max(totalGeo, 1))
         let weightedLon = (lhs.centroid.longitude * Double(lhs.geoPhotoCount) + rhs.centroid.longitude * Double(rhs.geoPhotoCount)) / Double(max(totalGeo, 1))
         let countryName = lhs.countryName ?? rhs.countryName
         let locationDescription = lhs.locationDescription ?? rhs.locationDescription
         return TravelCluster(
-            windowStart: min(lhs.windowStart, rhs.windowStart),
-            windowEnd: max(lhs.windowEnd, rhs.windowEnd),
+            windowStart: startDate,
+            windowEnd: endDate,
             centroid: CLLocationCoordinate2D(latitude: weightedLat, longitude: weightedLon),
             photoCount: totalCount,
             geoPhotoCount: totalGeo,

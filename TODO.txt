@@ -8,8 +8,8 @@ AGENTS: DO NOT TOUCH THIS FILE
 
 ## travel pipeline
 
-- album naming
 - test & fine tune
+- album naming
 
 ## visit (face) pipeline
 
