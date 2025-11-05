@@ -1,26 +1,28 @@
 AGENTS: DO NOT TOUCH THIS FILE
 
-# general
-
-- refactor & restructure
-
 # temporal albums
 
 ## travel pipeline
 
-- test & fine tune
-- album naming
+- only import un-geotagged jpegs/raws/heif, not pngs; remove pngs from existing albums
+- future: only import non-geotagged photos _with faces_ if they include one of the faces from geotagged photos; remove unknown-face from existing albums
 
 ## visit (face) pipeline
 
 - establish face baseline
 - cluster high numbers of atypical face appearances over 2-day windows
-- integrate no-face photos within the time window
+
+### required support: face DB
+
+- face (re)recognition
+- web UI for naming and merging
 
 ## holiday pipeline
 
-- start with date of holiday/birthday/etc. +/- 3 days
-- work outward from the actual date, merging face and travel clusters originating
+- works on user request only
+    - holiday name & date, birthday name & date
+- start with date of holiday +/- 2 days; birthday +/- 1 day
+- work outward from the actual date, merging face and travel clusters originating within the window
 
 ## superpipeline
 
