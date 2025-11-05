@@ -89,20 +89,25 @@ struct AIGrader {
         struct Content: Encodable {
             let type: String
             let text: String?
-            let imageBase64: String?
+            let imageURL: ImageURL?
 
             enum CodingKeys: String, CodingKey {
                 case type
                 case text
-                case imageBase64 = "image_base64"
+                case imageURL = "image_url"
+            }
+
+            struct ImageURL: Encodable {
+                let url: String
             }
 
             static func text(_ value: String) -> Content {
-                Content(type: "text", text: value, imageBase64: nil)
+                Content(type: "text", text: value, imageURL: nil)
             }
 
             static func image(_ base64: String) -> Content {
-                Content(type: "input_image", text: nil, imageBase64: base64)
+                let dataURL = "data:image/jpeg;base64,\(base64)"
+                return Content(type: "image_url", text: nil, imageURL: ImageURL(url: dataURL))
             }
         }
     }
