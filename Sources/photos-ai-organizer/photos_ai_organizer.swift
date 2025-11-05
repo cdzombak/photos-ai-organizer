@@ -670,6 +670,7 @@ final class TravelClusterAnalyzer {
         let countryMerged = mergeCountryClusters(annotated)
         let identified = assignClusterIDs(countryMerged)
         try persistClusters(identified, connection: connection)
+        try removeStaleClusters(keeping: Set(identified.compactMap { $0.clusterID }), connection: connection)
         let sorted = identified.sorted { lhs, rhs in
             if lhs.windowStart == rhs.windowStart {
                 return lhs.photoCount > rhs.photoCount
@@ -1069,6 +1070,20 @@ final class TravelClusterAnalyzer {
             return "- \(start) → \(end): \(cluster.photoCount) photos near \(location)"
         }
         return "Detected \(clusters.count) clusters (\(totalPhotos) photos):\n" + lines.joined(separator: "\n")
+    }
+
+    private func removeStaleClusters(keeping clusterIDs: Set<String>, connection: Connection) throws {
+        if clusterIDs.isEmpty {
+            let statement = try connection.prepareStatement(text: "DELETE FROM travel_clusters;")
+            defer { statement.close() }
+            try statement.execute()
+            return
+        }
+        let placeholders = (1...clusterIDs.count).map { "$\($0)" }.joined(separator: ", ")
+        let sql = "DELETE FROM travel_clusters WHERE cluster_id NOT IN (\(placeholders));"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        try statement.execute(parameterValues: Array(clusterIDs))
     }
 
     private func groupSamplesByBin(_ samples: [PhotoSample]) -> [BinKey: [PhotoSample]] {
