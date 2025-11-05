@@ -1,0 +1,8 @@
+postgres:
+  host: localhost
+  port: 5432
+  database: photos
+  user: photos
+  password: photos
+  ssl: false
+  auth_method: auto
