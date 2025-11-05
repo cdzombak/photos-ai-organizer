@@ -160,7 +160,7 @@ public struct TravelCluster {
             photoCount: photoCount,
             geoPhotoCount: geoPhotoCount,
             medianDistanceMeters: medianDistanceMeters,
-            locationDescription: countryName ?? locationDescription,
+            locationDescription: locationDescription ?? countryName,
             countryCode: countryCode,
             countryName: countryName,
             baselineCountryCode: baselineCountryCode,
