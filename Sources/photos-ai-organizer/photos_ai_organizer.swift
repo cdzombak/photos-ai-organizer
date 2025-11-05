@@ -51,11 +51,9 @@ enum CLICommand: String {
 struct CLIOptions {
     let command: CLICommand
     let configPath: String
-    let tableOverride: String?
 
     init(arguments: [String]) throws {
         var configPath = "photos-config.yml"
-        var table: String?
         var command: CLICommand?
 
         let args = Array(arguments.dropFirst())
@@ -92,7 +90,6 @@ struct CLIOptions {
 
         self.command = resolvedCommand
         self.configPath = configPath
-        self.tableOverride = table
     }
 }
 
@@ -460,7 +457,7 @@ struct PhotosMetadataExporterCLI {
     static func main() {
         do {
             let options = try CLIOptions(arguments: CommandLine.arguments)
-            let config = try PostgresConfig.fromConfigFile(path: options.configPath, tableOverride: options.tableOverride)
+            let config = try PostgresConfig.fromConfigFile(path: options.configPath, tableOverride: nil)
             let exporter = PhotoMetadataExporter(config: config)
             switch options.command {
             case .import:
