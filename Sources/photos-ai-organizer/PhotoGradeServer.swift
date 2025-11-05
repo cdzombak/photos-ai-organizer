@@ -4,7 +4,7 @@ import NIOHTTP1
 import Persistence
 import PostgresClientKit
 
-final class PhotoGradeServer {
+final class PhotoGradeServer: @unchecked Sendable {
     private let config: PostgresConfig
     private let photoLibrary = PhotoLibraryAdapter()
 
@@ -34,7 +34,7 @@ final class PhotoGradeServer {
     }
 }
 
-private final class GradeHTTPHandler: ChannelInboundHandler {
+private final class GradeHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
 
