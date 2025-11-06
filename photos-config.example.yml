@@ -6,12 +6,31 @@ postgres:
   password: photos
   ssl: false
   auth_method: auto
+
 mapbox:
   access_token: pk.your-token-here
+
 travel_albums:
-  folder_name: Travel Clusters
+  folder_name: Travel Albums
   pattern: "{location} {start} – {end}"
+
+thematic_folder: "Thematic Albums"
+thematic_albums:
+  - name: "Autumn Colors"
+    description: "Photos showcasing vibrant autumn colors in landscapes, urban settings, and nature."
+  - name: "City Nights"
+    description: "Nighttime cityscapes featuring illuminated buildings, streets, and urban life."
+  - name: "Portraits"
+    description: "Close-up photos capturing the essence and personality of individuals."
+  - name: "Landscapes"
+    description: "Wide-angle shots showcasing the beauty of nature, including mountains, forests, and oceans."
+
 ai:
-  base_url: https://openrouter.ai/api
-  api_key: sk-your-key-here
-  model: meta-llama/llama-4-scout
+  grade:
+    base_url: https://openrouter.ai/api
+    api_key: sk-your-grading-key
+    model: meta-llama/llama-4-scout
+  thematic:
+    base_url: https://openrouter.ai/api
+    api_key: sk-your-thematic-key
+    model: meta-llama/llama-4-thematic

@@ -45,6 +45,8 @@ enum CLICommand: String {
     case `import` = "import"
     case runTravelPipeline = "run-travel-pipeline"
     case syncTravelAlbums = "sync-travel-albums"
+    case runThematicPipeline = "run-thematic-pipeline"
+    case syncThematicAlbums = "sync-thematic-albums"
     case grade = "grade"
     case serveGrades = "serve-grades"
     case help = "help"
@@ -54,11 +56,13 @@ struct CLIOptions {
     let command: CLICommand
     let configPath: String
     let gradeConcurrency: Int?
+    let thematicConcurrency: Int?
 
     init(arguments: [String]) throws {
         var configPath = "photos-config.yml"
         var command: CLICommand?
         var gradeConcurrency: Int?
+        var thematicConcurrency: Int?
 
         let args = Array(arguments.dropFirst())
         var index = args.startIndex
@@ -80,13 +84,20 @@ struct CLIOptions {
                 guard args.indices.contains(valueIndex) else {
                     throw ExportError.invalidArgument("--concurrency requires a value (e.g. --concurrency 10)")
                 }
-                guard let currentCommand = command, currentCommand == .grade else {
-                    throw ExportError.invalidArgument("--concurrency can only be used with the 'grade' subcommand")
+                guard let currentCommand = command else {
+                    throw ExportError.invalidArgument("Specify a subcommand before --concurrency")
                 }
                 guard let value = Int(args[valueIndex]), value > 0 else {
                     throw ExportError.invalidArgument("--concurrency expects a positive integer")
                 }
-                gradeConcurrency = value
+                switch currentCommand {
+                case .grade:
+                    gradeConcurrency = value
+                case .runThematicPipeline:
+                    thematicConcurrency = value
+                default:
+                    throw ExportError.invalidArgument("--concurrency can only be used with the 'grade' or 'run-thematic-pipeline' subcommands")
+                }
                 index = valueIndex
             default:
                 if argument.hasPrefix("--") {
@@ -106,6 +117,7 @@ struct CLIOptions {
         self.command = command ?? .help
         self.configPath = configPath
         self.gradeConcurrency = gradeConcurrency
+        self.thematicConcurrency = thematicConcurrency
     }
 }
 
@@ -504,6 +516,14 @@ struct PhotosMetadataExporterCLI {
                 let syncer = TravelAlbumSynchronizer(config: config)
                 let summary = try syncer.run()
                 print(summary)
+            case .runThematicPipeline:
+                let pipeline = ThematicPipelineCommand(config: config)
+                let summary = try pipeline.run(concurrency: options.thematicConcurrency ?? 10)
+                print(summary)
+            case .syncThematicAlbums:
+                let syncer = ThematicAlbumSynchronizer(config: config)
+                let summary = try syncer.run()
+                print(summary)
             case .grade:
                 let grader = PhotoGradeCommand(config: config)
                 let summary = try grader.run(concurrency: options.gradeConcurrency ?? 10)
@@ -533,6 +553,8 @@ SUBCOMMANDS:
   import               Scan Photos and upsert metadata into Postgres.
   run-travel-pipeline  Build/annotate travel clusters and persist results.
   sync-travel-albums   Mirror stored clusters into Photos albums.
+  run-thematic-pipeline Apply thematic albums via AI classifications. (--concurrency N)
+  sync-thematic-albums  Create/update thematic albums in Photos.
   grade                Send Photos to an AI model for 0–10 quality grading. (--concurrency N)
   serve-grades         Run a simple web server previewing graded photos.
   help                 Show this message.
@@ -546,6 +568,8 @@ EXAMPLES:
   photos-ai-organizer import --config photos-config.yml
   photos-ai-organizer run-travel-pipeline
   photos-ai-organizer sync-travel-albums --config travel.yml
+  photos-ai-organizer run-thematic-pipeline --config photos-config.yml
+  photos-ai-organizer sync-thematic-albums --config photos-config.yml
 """
     print(text)
 }

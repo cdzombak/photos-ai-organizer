@@ -15,7 +15,10 @@ public struct PostgresConfig {
     public let mapbox: MapboxConfig?
     public let albumFolderName: String?
     public let albumNamePattern: String?
-    public let ai: AIConfig?
+    public let thematicAlbums: [ThematicAlbum]?
+    public let thematicFolderName: String?
+    public let gradingAI: AIConfig?
+    public let thematicAI: AIConfig?
 
     public enum AuthMethod: Decodable {
         case auto
@@ -86,7 +89,10 @@ public struct PostgresConfig {
             mapbox: rawConfig.mapbox,
             albumFolderName: rawConfig.travelAlbums?.folderName ?? "Travel Clusters",
             albumNamePattern: rawConfig.travelAlbums?.pattern,
-            ai: rawConfig.ai
+            thematicAlbums: rawConfig.thematicAlbums,
+            thematicFolderName: rawConfig.thematicFolder ?? "Thematic Albums",
+            gradingAI: rawConfig.ai?.grade,
+            thematicAI: rawConfig.ai?.thematic ?? rawConfig.ai?.grade
         )
     }
 
@@ -154,12 +160,16 @@ public struct PostgresConfig {
         public let postgres: Postgres
         public let mapbox: MapboxConfig?
         public let travelAlbums: AlbumConfig?
-        public let ai: AIConfig?
+        public let thematicAlbums: [ThematicAlbum]?
+        public let thematicFolder: String?
+        public let ai: AISection?
 
         enum CodingKeys: String, CodingKey {
             case postgres
             case mapbox
             case travelAlbums = "travel_albums"
+            case thematicAlbums = "thematic_albums"
+            case thematicFolder = "thematic_folder"
             case ai
         }
     }
@@ -183,6 +193,11 @@ public struct AlbumConfig: Decodable {
     }
 }
 
+public struct ThematicAlbum: Decodable, Sendable {
+    public let name: String
+    public let description: String?
+}
+
 public struct AIConfig: Decodable, Sendable {
     public let baseURL: URL
     public let apiKey: String
@@ -193,4 +208,9 @@ public struct AIConfig: Decodable, Sendable {
         case apiKey = "api_key"
         case model
     }
+}
+
+public struct AISection: Decodable {
+    public let grade: AIConfig
+    public let thematic: AIConfig?
 }

@@ -11,6 +11,8 @@ Swift CLI that syncs Apple Photos metadata into PostgreSQL and analyzes it to or
 - `import` – scan Photos and upsert asset metadata into Postgres.
 - `grade` – ask an AI model to rate all photos 0–10 (`--concurrency N` to control parallelism; default 10).
 - `serve-grades` – expose a simple web UI previewing graded samples.
+- `run-thematic-pipeline` – classify favorite/highly rated photos into configured thematic albums via AI (`--concurrency N`).
+- `sync-thematic-albums` – create/update thematic Photos albums based on AI classifications.
 
 Global flags: `--config <file>` (defaults to `photos-config.yml`), `--help`/`-h`.
 
@@ -27,17 +29,26 @@ Key sections:
 - `postgres`: connection info + metadata table name
 - `mapbox`: access token for travel geocoding (optional if you skip travel pipeline)
 - `travel_albums`: folder/name pattern for synced travel albums
-- `ai`: `base_url`, `api_key`, `model` for the OpenAI-compatible service used by the `grade` subcommand
+- `thematic_albums`: list of objects with `name` and `description` describing each thematic album presented to the AI
+- `thematic_folder`: folder name where thematic albums are synced in Photos
+- `ai.grade`: `base_url`, `api_key`, `model` for the grading pipeline
+- `ai.thematic`: optional override (same fields as above) for the thematic pipeline; falls back to `ai.grade` when omitted
 
 ## Quickstart
 
 ```bash
-swift run photos-ai-organizer import  --config photos-config.yml
+# Import photos:
+swift run photos-ai-organizer import --config photos-config.yml
 
-swift run photos-ai-organizer run-travel-pipeline  --config photos-config.yml
-swift run photos-ai-organizer sync-travel-albums  --config photos-config.yml
+# Run the travel pipeline and sync results to Photos app:
+swift run photos-ai-organizer run-travel-pipeline --config photos-config.yml --concurrency 10
+swift run photos-ai-organizer sync-travel-albums --config photos-config.yml
+
+# Run the thematic pipeline and sync results to Photos app:
 swift run photos-ai-organizer grade --config photos-config.yml
 swift run photos-ai-organizer serve-grades --config photos-config.yml
+swift run photos-ai-organizer run-thematic-pipeline --config photos-config.yml --concurrency 10
+swift run photos-ai-organizer sync-thematic-albums --config photos-config.yml
 ```
 
 ## Import Process
@@ -52,13 +63,29 @@ Future pipelines are planned to include a face analysis pipeline (which will als
 
 You can create albums based on the output of the travel pipeline, and in the future I plan to support creating albums based on the face pipeline (for "visits" with people you don't usually see/photograph). Eventually, once the superpipeline is implemented, creating albums based on it alone will be preferred.
 
-## Thematic Analysis Pipelines
+## Thematic Analysis Pipeline
 
-Future support for thematic analysis is planned, to help you collect your best photos into albums based on themes like "nature", "architecture", "food", etc.
+First, the `grade` pipeline asks an LLM to assign a numeric grade to each photo. This prevents including bad photos in your thematic albums. You can preview graded photos via the `serve-grades` command.
+
+The thematic pipeline (`run-thematic-pipeline`) sends each user-favorite or highly graded photo (grade ≥ 8) to the configured AI model, providing the name and description of every configured thematic album and asking which ones apply. Results are stored in Postgres so each album/photo pair is only evaluated once unless you add new thematic albums later.
+
+After running the pipeline, execute `sync-thematic-albums` to mirror positive matches into Photos albums under your configured `thematic_folder`. This sync only ever adds assets to albums—existing contents are left untouched.
 
 ## Roadmap / TODO
 
-### visit (face) pipeline (temporal)
+### album sync improvements
+
+We'll need to improve how we sync albums to the Photos app, such that:
+
+- user modifications (adding/removing photos) are preserved across syncs (unless the user asks otherwise)
+- user-deleted trip albums aren't recreated (unless the user asks)
+- we support re-detecting trip and thematic albums that have been moved or renamed
+
+### recommended thematic album workflow
+
+document a recommended AI thematic album workflow (pull into ai-organizer folder, and then curate into your own albums). this works around the fact that AI isn't a great curator, but allows you to work from a more approachable set of photos for curation.
+
+### (temporal) visit (face-based) pipeline
 
 - establish face baseline
 - cluster high numbers of atypical face appearances over 2-day windows
@@ -83,16 +110,6 @@ Future support for thematic analysis is planned, to help you collect your best p
 
 - consolidate clusters based on overlapping dates, preferring "holiday" as the primary theme, then "trip", then "visit"
 - create albums (eventually this is the only spot that'll do this)
-
-### thematic pipeline
-
-This will be a single pipeline that asks an LLM to grade each image considering a number of factors (image quality, composition, etc.). (Grading can be performed ahead of time.) If the grade is high enough (configurable), it will ask whether the image belongs in any of a (configurable) set of albums. Contextual information/metadata will be provided to help with decision making.
-
-All LLM results are cached in the database to avoid repeated calls.
-
-#### grade-preview UI
-
-We'll need some sort of interactive preview UI allowing the user to see a set of photos for each grade.
 
 ## License
 

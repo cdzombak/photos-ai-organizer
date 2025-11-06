@@ -14,8 +14,8 @@ final class PhotoGradeCommand: @unchecked Sendable {
     }
 
     func run(concurrency: Int = 10) throws -> String {
-        guard let aiConfig = config.ai else {
-            throw ExportError.invalidConfig("AI configuration (ai.base_url/api_key/model) is required for grading.")
+        guard let aiConfig = config.gradingAI else {
+            throw ExportError.invalidConfig("AI grading configuration (ai.grade.*) is required for grading.")
         }
         try photoLibrary.ensureAccess()
         let connection = try Connection(configuration: config.makeConnectionConfiguration())

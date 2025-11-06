@@ -87,6 +87,24 @@ struct PhotoLibraryAdapter: @unchecked Sendable {
         }
     }
 
+    @discardableResult
+    func addAssets(_ assetIDs: [String], to album: PHAssetCollection) throws -> Int {
+        guard !assetIDs.isEmpty else { return 0 }
+        let existingAssets = PHAsset.fetchAssets(in: album, options: nil)
+        var existingIdentifiers = Set<String>()
+        existingAssets.enumerateObjects { asset, _, _ in
+            existingIdentifiers.insert(asset.localIdentifier)
+        }
+        let missingIDs = assetIDs.filter { !existingIdentifiers.contains($0) }
+        guard !missingIDs.isEmpty else { return 0 }
+        let assetsToAdd = PHAsset.fetchAssets(withLocalIdentifiers: missingIDs, options: nil)
+        try PHPhotoLibrary.shared().performChangesAndWait {
+            guard let request = PHAssetCollectionChangeRequest(for: album) else { return }
+            request.addAssets(assetsToAdd)
+        }
+        return missingIDs.count
+    }
+
     private func fetchFolder(named name: String) -> PHCollectionList? {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "title = %@", name)
