@@ -88,41 +88,46 @@ struct PhotoLibraryAdapter: @unchecked Sendable {
     }
 
     @discardableResult
-    func addAssets(_ assetIDs: [String], to album: PHAssetCollection) throws -> Int {
-        guard !assetIDs.isEmpty else { return 0 }
+    func addAssets(_ assetIDs: [String], to album: PHAssetCollection) throws -> [String] {
+        guard !assetIDs.isEmpty else { return [] }
         let existingAssets = PHAsset.fetchAssets(in: album, options: nil)
         var existingIdentifiers = Set<String>()
         existingAssets.enumerateObjects { asset, _, _ in
             existingIdentifiers.insert(asset.localIdentifier)
         }
         let missingIDs = assetIDs.filter { !existingIdentifiers.contains($0) }
-        guard !missingIDs.isEmpty else { return 0 }
+        guard !missingIDs.isEmpty else { return [] }
         let assetsToAdd = PHAsset.fetchAssets(withLocalIdentifiers: missingIDs, options: nil)
+        var resolvedIDs: [String] = []
+        assetsToAdd.enumerateObjects { asset, _, _ in
+            resolvedIDs.append(asset.localIdentifier)
+        }
+        guard !resolvedIDs.isEmpty else { return [] }
         try PHPhotoLibrary.shared().performChangesAndWait {
             guard let request = PHAssetCollectionChangeRequest(for: album) else { return }
             request.addAssets(assetsToAdd)
         }
-        return missingIDs.count
+        return resolvedIDs
     }
 
-    private func fetchFolder(named name: String) -> PHCollectionList? {
+    func fetchFolder(named name: String) -> PHCollectionList? {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "title = %@", name)
         let result = PHCollectionList.fetchCollectionLists(with: .folder, subtype: .any, options: options)
         return result.firstObject
     }
 
-    private func fetchFolder(by identifier: String) -> PHCollectionList? {
+    func fetchFolder(by identifier: String) -> PHCollectionList? {
         let result = PHCollectionList.fetchCollectionLists(withLocalIdentifiers: [identifier], options: nil)
         return result.firstObject
     }
 
-    private func fetchAlbum(by identifier: String) -> PHAssetCollection? {
+    func fetchAlbum(by identifier: String) -> PHAssetCollection? {
         let result = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [identifier], options: nil)
         return result.firstObject
     }
 
-    private func fetchAlbum(named name: String, in folder: PHCollectionList) -> PHAssetCollection? {
+    func fetchAlbum(named name: String, in folder: PHCollectionList) -> PHAssetCollection? {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "title = %@", name)
         let result = PHCollectionList.fetchCollections(in: folder, options: options)
@@ -134,6 +139,29 @@ struct PhotoLibraryAdapter: @unchecked Sendable {
             }
         }
         return found
+    }
+}
+
+extension PhotoLibraryAdapter {
+    func assetIdentifiers(in album: PHAssetCollection) -> [String] {
+        let assets = PHAsset.fetchAssets(in: album, options: nil)
+        var identifiers: [String] = []
+        assets.enumerateObjects { asset, _, _ in
+            identifiers.append(asset.localIdentifier)
+        }
+        return identifiers
+    }
+
+    @discardableResult
+    func removeAssets(_ assetIDs: [String], from album: PHAssetCollection) throws -> Int {
+        guard !assetIDs.isEmpty else { return 0 }
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: assetIDs, options: nil)
+        guard assets.count > 0 else { return 0 }
+        try PHPhotoLibrary.shared().performChangesAndWait {
+            guard let request = PHAssetCollectionChangeRequest(for: album) else { return }
+            request.removeAssets(assets)
+        }
+        return assets.count
     }
 }
 

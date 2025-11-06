@@ -81,7 +81,7 @@ public final class TravelClusterStore {
 
     public func fetchStoredClusters(connection: Connection) throws -> [StoredCluster] {
         let sql = """
-        SELECT cluster_id, window_start, window_end, centroid_lat, centroid_lon, photo_count, geo_photo_count, country_name, location_description, album_local_id
+        SELECT cluster_id, window_start, window_end, centroid_lat, centroid_lon, photo_count, geo_photo_count, country_name, location_description, album_local_id, album_removed_at
         FROM travel_clusters
         ORDER BY window_start ASC;
         """
@@ -97,6 +97,7 @@ public final class TravelClusterStore {
             let countryName: String?
             let locationDescription: String?
             let albumLocalID: String?
+            let albumRemovedAt: Date?
         }
 
         var rows: [Row] = []
@@ -114,6 +115,7 @@ public final class TravelClusterStore {
             let country = try resolved.columns[7].optionalString()
             let location = try resolved.columns[8].optionalString()
             let albumID = try resolved.columns[9].optionalString()
+            let albumRemovedAt = try resolved.columns[10].optionalTimestampWithTimeZone()?.date
             rows.append(Row(
                 id: clusterID,
                 windowStart: start,
@@ -122,7 +124,8 @@ public final class TravelClusterStore {
                 geoPhotoCount: geoCount,
                 countryName: country,
                 locationDescription: location,
-                albumLocalID: albumID
+                albumLocalID: albumID,
+                albumRemovedAt: albumRemovedAt
             ))
         }
         guard !rows.isEmpty else { return [] }
@@ -137,6 +140,7 @@ public final class TravelClusterStore {
                 countryName: row.countryName,
                 locationDescription: row.locationDescription,
                 albumLocalID: row.albumLocalID,
+                albumRemovedAt: row.albumRemovedAt,
                 assetIDs: assetMap[row.id] ?? []
             )
         }
@@ -159,11 +163,13 @@ public final class TravelClusterStore {
                 baseline_country_code TEXT,
                 location_description TEXT,
                 album_local_id TEXT,
-                computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                album_removed_at TIMESTAMPTZ
             );
             """,
             "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS album_local_id TEXT;",
-            "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS baseline_country_code TEXT;"
+            "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS baseline_country_code TEXT;",
+            "ALTER TABLE travel_clusters ADD COLUMN IF NOT EXISTS album_removed_at TIMESTAMPTZ;"
         ]
     }
 
@@ -213,4 +219,21 @@ public final class TravelClusterStore {
         return map
     }
 
+}
+
+extension TravelClusterStore {
+    public func updateAlbumIdentifier(_ identifier: String?, for clusterID: String, connection: Connection) throws {
+        let sql = "UPDATE travel_clusters SET album_local_id = $1 WHERE cluster_id = $2;"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        try statement.execute(parameterValues: [identifier, clusterID])
+    }
+
+    public func updateAlbumRemovalDate(_ date: Date?, for clusterID: String, connection: Connection) throws {
+        let sql = "UPDATE travel_clusters SET album_removed_at = $1 WHERE cluster_id = $2;"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        let timestamp = date.map { PostgresTimestampWithTimeZone(date: $0) }
+        try statement.execute(parameterValues: [timestamp, clusterID])
+    }
 }

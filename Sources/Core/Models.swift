@@ -246,6 +246,7 @@ public struct StoredCluster {
     public let countryName: String?
     public let locationDescription: String?
     public let albumLocalID: String?
+    public let albumRemovedAt: Date?
     public let assetIDs: [String]
 
     public init(
@@ -257,6 +258,7 @@ public struct StoredCluster {
         countryName: String?,
         locationDescription: String?,
         albumLocalID: String?,
+        albumRemovedAt: Date?,
         assetIDs: [String]
     ) {
         self.id = id
@@ -267,6 +269,7 @@ public struct StoredCluster {
         self.countryName = countryName
         self.locationDescription = locationDescription
         self.albumLocalID = albumLocalID
+        self.albumRemovedAt = albumRemovedAt
         self.assetIDs = assetIDs
     }
 }

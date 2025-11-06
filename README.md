@@ -12,13 +12,20 @@ Swift CLI that syncs Apple Photos metadata into PostgreSQL and analyzes it to or
 - `grade` – ask an AI model to rate all photos 0–10 (`--concurrency N` to control parallelism; default 10).
 - `serve-grades` – expose a simple web UI previewing graded samples.
 - `run-thematic-pipeline` – classify favorite/highly rated photos into configured thematic albums via AI (`--concurrency N`).
-- `sync-thematic-albums` – create/update thematic Photos albums based on AI classifications.
+- `sync-thematic-albums` – create/update thematic Photos albums based on AI classifications while respecting manual edits (`--restore-removals`, `--danger-remove`).
 
 Global flags: `--config <file>` (defaults to `photos-config.yml`), `--help`/`-h`.
 
+### Album Sync Safety Flags
+
+Both sync commands default to preserving manual edits you make directly inside Photos:
+
+- `--restore-removals` — re-create deleted travel albums and re-add assets that were previously removed from either travel or thematic albums. Without this flag, removed items stay removed.
+- `--danger-remove` — remove assets that are only in Photos (not in the database) when syncing. Without this flag, those manually added assets remain in place.
+
 ### Travel Pipeline
 - `run-travel-pipeline` – build/annotate travel clusters with Mapbox geocoding and persist results.
-- `sync-travel-albums` – create/update Photos albums for stored clusters.
+- `sync-travel-albums` – create/update Photos albums for stored clusters while respecting manual edits (`--restore-removals`, `--danger-remove`).
 
 ## Configuration
 
@@ -63,23 +70,21 @@ Future pipelines are planned to include a face analysis pipeline (which will als
 
 You can create albums based on the output of the travel pipeline, and in the future I plan to support creating albums based on the face pipeline (for "visits" with people you don't usually see/photograph). Eventually, once the superpipeline is implemented, creating albums based on it alone will be preferred.
 
+### Travel Pipeline
+
+Run the travel pipeline (`run-travel-pipeline`) to cluster photos based on spatiotemporal proximity. Each cluster is annotated with a location name via Mapbox reverse geocoding.
+
+After running the pipeline, execute `sync-travel-albums` to mirror travel clusters into Photos albums under your configured `travel_albums.folder_name`. By default the sync only adds assets and preserves manual edits; pass `--restore-removals` to re-add assets you've removed from the Photos albums, or `--danger-remove` to delete assets that only exist in Photos.
+
 ## Thematic Analysis Pipeline
 
 First, the `grade` pipeline asks an LLM to assign a numeric grade to each photo. This prevents including bad photos in your thematic albums. You can preview graded photos via the `serve-grades` command.
 
 The thematic pipeline (`run-thematic-pipeline`) sends each user-favorite or highly graded photo (grade ≥ 8) to the configured AI model, providing the name and description of every configured thematic album and asking which ones apply. Results are stored in Postgres so each album/photo pair is only evaluated once unless you add new thematic albums later.
 
-After running the pipeline, execute `sync-thematic-albums` to mirror positive matches into Photos albums under your configured `thematic_folder`. This sync only ever adds assets to albums—existing contents are left untouched.
+After running the pipeline, execute `sync-thematic-albums` to mirror positive matches into Photos albums under your configured `thematic_folder`. By default the sync only adds assets and preserves manual edits; pass `--restore-removals` to re-add assets you've removed from the Photos albums, or `--danger-remove` to delete assets that only exist in Photos.
 
 ## Roadmap / TODO
-
-### album sync improvements
-
-We'll need to improve how we sync albums to the Photos app, such that:
-
-- user modifications (adding/removing photos) are preserved across syncs (unless the user asks otherwise)
-- user-deleted trip albums aren't recreated (unless the user asks)
-- we support re-detecting trip and thematic albums that have been moved or renamed
 
 ### recommended thematic album workflow
 

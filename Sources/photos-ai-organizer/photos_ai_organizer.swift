@@ -57,12 +57,16 @@ struct CLIOptions {
     let configPath: String
     let gradeConcurrency: Int?
     let thematicConcurrency: Int?
+    let restoreRemovals: Bool
+    let dangerRemove: Bool
 
     init(arguments: [String]) throws {
         var configPath = "photos-config.yml"
         var command: CLICommand?
         var gradeConcurrency: Int?
         var thematicConcurrency: Int?
+        var restoreRemovals = false
+        var dangerRemove = false
 
         let args = Array(arguments.dropFirst())
         var index = args.startIndex
@@ -99,6 +103,22 @@ struct CLIOptions {
                     throw ExportError.invalidArgument("--concurrency can only be used with the 'grade' or 'run-thematic-pipeline' subcommands")
                 }
                 index = valueIndex
+            case "--restore-removals":
+                guard let currentCommand = command else {
+                    throw ExportError.invalidArgument("Specify a subcommand before --restore-removals")
+                }
+                guard currentCommand == .syncTravelAlbums || currentCommand == .syncThematicAlbums else {
+                    throw ExportError.invalidArgument("--restore-removals can only be used with 'sync-travel-albums' or 'sync-thematic-albums'")
+                }
+                restoreRemovals = true
+            case "--danger-remove":
+                guard let currentCommand = command else {
+                    throw ExportError.invalidArgument("Specify a subcommand before --danger-remove")
+                }
+                guard currentCommand == .syncTravelAlbums || currentCommand == .syncThematicAlbums else {
+                    throw ExportError.invalidArgument("--danger-remove can only be used with 'sync-travel-albums' or 'sync-thematic-albums'")
+                }
+                dangerRemove = true
             default:
                 if argument.hasPrefix("--") {
                     throw ExportError.invalidArgument("Unknown option \(argument)")
@@ -118,6 +138,8 @@ struct CLIOptions {
         self.configPath = configPath
         self.gradeConcurrency = gradeConcurrency
         self.thematicConcurrency = thematicConcurrency
+        self.restoreRemovals = restoreRemovals
+        self.dangerRemove = dangerRemove
     }
 }
 
@@ -430,8 +452,11 @@ final class TravelAlbumSynchronizer {
     private let dateFormatter: DateFormatter
     private let clusterStore: TravelClusterStore
     private let photoLibrary: PhotoLibraryAdapter
+    private let overrideStore: AlbumSyncOverrideStore
+    private let restoreRemovals: Bool
+    private let dangerRemove: Bool
 
-    init(config: PostgresConfig) {
+    init(config: PostgresConfig, restoreRemovals: Bool = false, dangerRemove: Bool = false) {
         self.config = config
         self.folderName = config.albumFolderName ?? "Travel Clusters"
         self.namePattern = config.albumNamePattern ?? "{location} {start} – {end}"
@@ -441,27 +466,182 @@ final class TravelAlbumSynchronizer {
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         self.dateFormatter = formatter
         self.photoLibrary = PhotoLibraryAdapter()
+        self.overrideStore = AlbumSyncOverrideStore(scope: .travel)
+        self.restoreRemovals = restoreRemovals
+        self.dangerRemove = dangerRemove
     }
 
     func run() throws -> String {
         try photoLibrary.ensureAccess()
         let connection = try Connection(configuration: config.makeConnectionConfiguration())
         defer { connection.close() }
+        try clusterStore.ensureTablesExist(connection: connection)
+        try overrideStore.ensureTableExists(connection: connection)
 
         let clusters = try clusterStore.fetchStoredClusters(connection: connection)
         guard !clusters.isEmpty else { return "No travel clusters to sync." }
 
         let folder = try photoLibrary.ensureFolder(named: folderName)
-        var synced = 0
+        var touchedAlbumIdentifiers: Set<String> = []
+        var albumsSkippedDeletion = 0
+        var skippedRemovals = 0
+        var skippedExtras = 0
+        var totalAdded = 0
+        var totalRemoved = 0
+
         for cluster in clusters {
+            guard !cluster.assetIDs.isEmpty else { continue }
+
+            if cluster.albumRemovedAt != nil && !restoreRemovals {
+                albumsSkippedDeletion += 1
+                continue
+            }
+
             let albumTitle = albumTitle(for: cluster)
-            let album = try photoLibrary.ensureAlbum(named: albumTitle, existingIdentifier: cluster.albumLocalID, in: folder)
-            try photoLibrary.updateAlbum(album, with: cluster.assetIDs)
-            try updateAlbumIdentifier(album.localIdentifier, for: cluster.id, connection: connection)
-            synced += 1
+            guard let album = try resolveAlbum(for: cluster, title: albumTitle, folder: folder, connection: connection) else {
+                albumsSkippedDeletion += 1
+                continue
+            }
+
+            let desiredSet = Set(cluster.assetIDs)
+            let existingAssetIDs = Set(photoLibrary.assetIdentifiers(in: album))
+            let extras = existingAssetIDs.subtracting(desiredSet)
+
+            try overrideStore.clearObsoleteOverrides(change: .userRemoved, albumKey: cluster.id, validAssetIDs: desiredSet, connection: connection)
+            try overrideStore.clearObsoleteOverrides(change: .synced, albumKey: cluster.id, validAssetIDs: desiredSet, connection: connection)
+            try overrideStore.clearObsoleteOverrides(change: .userAdded, albumKey: cluster.id, validAssetIDs: extras, connection: connection)
+
+            let state = try overrideStore.state(for: cluster.id, connection: connection)
+            var assetsToAdd: [String] = []
+            var newManualRemovals: [String] = []
+            var assetsToRemove: [String] = []
+            var newManualAdditions: [String] = []
+
+            let currentlyMissing = desiredSet.subtracting(existingAssetIDs)
+            for assetID in currentlyMissing {
+                if state.userRemoved.contains(assetID) {
+                    if restoreRemovals {
+                        assetsToAdd.append(assetID)
+                    } else {
+                        skippedRemovals += 1
+                    }
+                    continue
+                }
+                if state.synced.contains(assetID) {
+                    if restoreRemovals {
+                        assetsToAdd.append(assetID)
+                    } else {
+                        newManualRemovals.append(assetID)
+                        skippedRemovals += 1
+                    }
+                    continue
+                }
+                assetsToAdd.append(assetID)
+            }
+
+            for assetID in extras {
+                if state.userAdded.contains(assetID) {
+                    if dangerRemove {
+                        assetsToRemove.append(assetID)
+                    } else {
+                        skippedExtras += 1
+                    }
+                    continue
+                }
+                if dangerRemove {
+                    assetsToRemove.append(assetID)
+                } else {
+                    newManualAdditions.append(assetID)
+                    skippedExtras += 1
+                }
+            }
+
+            if !newManualRemovals.isEmpty {
+                try overrideStore.record(change: .userRemoved, albumKey: cluster.id, albumLocalID: album.localIdentifier, assetIDs: newManualRemovals, connection: connection)
+                try overrideStore.clear(change: .synced, albumKey: cluster.id, assetIDs: newManualRemovals, connection: connection)
+            }
+
+            if !newManualAdditions.isEmpty {
+                try overrideStore.record(change: .userAdded, albumKey: cluster.id, albumLocalID: album.localIdentifier, assetIDs: newManualAdditions, connection: connection)
+            }
+
+            if !assetsToAdd.isEmpty {
+                let addedIDs = try photoLibrary.addAssets(assetsToAdd, to: album)
+                if !addedIDs.isEmpty {
+                    totalAdded += addedIDs.count
+                    touchedAlbumIdentifiers.insert(cluster.id)
+                    try overrideStore.record(change: .synced, albumKey: cluster.id, albumLocalID: album.localIdentifier, assetIDs: addedIDs, connection: connection)
+                    try overrideStore.clear(change: .userRemoved, albumKey: cluster.id, assetIDs: addedIDs, connection: connection)
+                }
+            }
+
+            if dangerRemove, !assetsToRemove.isEmpty {
+                let removed = try photoLibrary.removeAssets(assetsToRemove, from: album)
+                if removed > 0 {
+                    totalRemoved += removed
+                    touchedAlbumIdentifiers.insert(cluster.id)
+                    try overrideStore.clear(change: .userAdded, albumKey: cluster.id, assetIDs: assetsToRemove, connection: connection)
+                    try overrideStore.clear(change: .synced, albumKey: cluster.id, assetIDs: assetsToRemove, connection: connection)
+                }
+            }
         }
 
-        return "Synced \(synced) travel albums into folder '\(folderName)'."
+        var components: [String] = []
+        components.append("Touched \(touchedAlbumIdentifiers.count) travel albums in folder '\(folderName)'")
+        if totalAdded > 0 {
+            components.append("added \(totalAdded) assets")
+        }
+        if totalRemoved > 0 {
+            components.append("removed \(totalRemoved) assets")
+        }
+        if albumsSkippedDeletion > 0 {
+            components.append("skipped \(albumsSkippedDeletion) deleted albums (use --restore-removals to recreate)")
+        }
+        if skippedRemovals > 0 {
+            components.append("respected \(skippedRemovals) user removals")
+        }
+        if skippedExtras > 0 {
+            components.append("left \(skippedExtras) user additions (rerun with --danger-remove to clean up)")
+        }
+
+        return components.joined(separator: "; ") + "."
+    }
+
+    private func resolveAlbum(for cluster: StoredCluster, title: String, folder: PHCollectionList, connection: Connection) throws -> PHAssetCollection? {
+        var existing: PHAssetCollection?
+        if let identifier = cluster.albumLocalID {
+            existing = photoLibrary.fetchAlbum(by: identifier)
+        }
+        if existing == nil {
+            existing = photoLibrary.fetchAlbum(named: title, in: folder)
+        }
+        if let album = existing {
+            if album.localIdentifier != cluster.albumLocalID {
+                try clusterStore.updateAlbumIdentifier(album.localIdentifier, for: cluster.id, connection: connection)
+            }
+            if cluster.albumRemovedAt != nil {
+                try clusterStore.updateAlbumRemovalDate(nil, for: cluster.id, connection: connection)
+            }
+            return album
+        }
+
+        let hasBeenCreatedBefore = cluster.albumLocalID != nil || cluster.albumRemovedAt != nil
+        if !hasBeenCreatedBefore {
+            let album = try photoLibrary.ensureAlbum(named: title, existingIdentifier: cluster.albumLocalID, in: folder)
+            try clusterStore.updateAlbumIdentifier(album.localIdentifier, for: cluster.id, connection: connection)
+            try clusterStore.updateAlbumRemovalDate(nil, for: cluster.id, connection: connection)
+            return album
+        }
+
+        guard restoreRemovals else {
+            try clusterStore.updateAlbumRemovalDate(Date(), for: cluster.id, connection: connection)
+            return nil
+        }
+
+        let album = try photoLibrary.ensureAlbum(named: title, existingIdentifier: cluster.albumLocalID, in: folder)
+        try clusterStore.updateAlbumIdentifier(album.localIdentifier, for: cluster.id, connection: connection)
+        try clusterStore.updateAlbumRemovalDate(nil, for: cluster.id, connection: connection)
+        return album
     }
 
     private func albumTitle(for cluster: StoredCluster) -> String {
@@ -485,13 +665,6 @@ final class TravelAlbumSynchronizer {
             .replacingOccurrences(of: "{end_yyyy}", with: endYear)
             .replacingOccurrences(of: "{end_mm}", with: endMonth)
     }
-
-    private func updateAlbumIdentifier(_ identifier: String, for clusterID: String, connection: Connection) throws {
-        let sql = "UPDATE travel_clusters SET album_local_id = $1 WHERE cluster_id = $2;"
-        let statement = try connection.prepareStatement(text: sql)
-        defer { statement.close() }
-        try statement.execute(parameterValues: [identifier, clusterID])
-    }
 }
 
 // MARK: - Entry Point
@@ -513,7 +686,11 @@ struct PhotosMetadataExporterCLI {
                 let summary = try pipeline.run()
                 print(summary)
             case .syncTravelAlbums:
-                let syncer = TravelAlbumSynchronizer(config: config)
+                let syncer = TravelAlbumSynchronizer(
+                    config: config,
+                    restoreRemovals: options.restoreRemovals,
+                    dangerRemove: options.dangerRemove
+                )
                 let summary = try syncer.run()
                 print(summary)
             case .runThematicPipeline:
@@ -521,7 +698,11 @@ struct PhotosMetadataExporterCLI {
                 let summary = try pipeline.run(concurrency: options.thematicConcurrency ?? 10)
                 print(summary)
             case .syncThematicAlbums:
-                let syncer = ThematicAlbumSynchronizer(config: config)
+                let syncer = ThematicAlbumSynchronizer(
+                    config: config,
+                    restoreRemovals: options.restoreRemovals,
+                    dangerRemove: options.dangerRemove
+                )
                 let summary = try syncer.run()
                 print(summary)
             case .grade:
@@ -552,9 +733,9 @@ USAGE:
 SUBCOMMANDS:
   import               Scan Photos and upsert metadata into Postgres.
   run-travel-pipeline  Build/annotate travel clusters and persist results.
-  sync-travel-albums   Mirror stored clusters into Photos albums.
+  sync-travel-albums   Mirror stored clusters into Photos albums. (--restore-removals, --danger-remove)
   run-thematic-pipeline Apply thematic albums via AI classifications. (--concurrency N)
-  sync-thematic-albums  Create/update thematic albums in Photos.
+  sync-thematic-albums  Create/update thematic albums in Photos. (--restore-removals, --danger-remove)
   grade                Send Photos to an AI model for 0–10 quality grading. (--concurrency N)
   serve-grades         Run a simple web server previewing graded photos.
   help                 Show this message.
@@ -562,6 +743,8 @@ SUBCOMMANDS:
 OPTIONS:
   --config <file>   Path to YAML config (default: photos-config.yml)
   --table <name>    Override metadata table (default: photo_metadata)
+  --restore-removals  Allow sync commands to recreate deleted albums or re-add user removed assets.
+  --danger-remove     Allow sync commands to delete assets from Photos when they are not in the database.
   --help, -h        Display help without running a subcommand
 
 EXAMPLES:
