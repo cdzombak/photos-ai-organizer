@@ -196,6 +196,7 @@ struct AssetMetadata {
     let latitude: Double?
     let longitude: Double?
     let uniformTypeIdentifier: String?
+    let isFavorite: Bool
 
     init(asset: PHAsset) {
         identifier = asset.localIdentifier
@@ -205,6 +206,7 @@ struct AssetMetadata {
         modificationDate = asset.modificationDate
         caption = AssetMetadata.caption(from: asset)
         uniformTypeIdentifier = AssetMetadata.uti(from: asset)
+        isFavorite = asset.isFavorite
         if let coordinate = asset.location?.coordinate, CLLocationCoordinate2DIsValid(coordinate) {
             latitude = coordinate.latitude
             longitude = coordinate.longitude
@@ -288,7 +290,8 @@ final class PhotoMetadataExporter {
             caption TEXT,
             location_latitude DOUBLE PRECISION,
             location_longitude DOUBLE PRECISION,
-            uniform_type_identifier TEXT
+            uniform_type_identifier TEXT,
+            is_favorite BOOLEAN NOT NULL DEFAULT FALSE
         );
         """
         let statement = try connection.prepareStatement(text: sql)
@@ -301,7 +304,8 @@ final class PhotoMetadataExporter {
         let alterStatements = [
             "ALTER TABLE \(config.tableName) ADD COLUMN IF NOT EXISTS location_latitude DOUBLE PRECISION;",
             "ALTER TABLE \(config.tableName) ADD COLUMN IF NOT EXISTS location_longitude DOUBLE PRECISION;",
-            "ALTER TABLE \(config.tableName) ADD COLUMN IF NOT EXISTS uniform_type_identifier TEXT;"
+            "ALTER TABLE \(config.tableName) ADD COLUMN IF NOT EXISTS uniform_type_identifier TEXT;",
+            "ALTER TABLE \(config.tableName) ADD COLUMN IF NOT EXISTS is_favorite BOOLEAN NOT NULL DEFAULT FALSE;"
         ]
         for sql in alterStatements {
             let statement = try connection.prepareStatement(text: sql)
@@ -317,8 +321,8 @@ final class PhotoMetadataExporter {
     ) throws -> (upserted: Int, identifiers: Set<String>) {
         let insertSQL = """
         INSERT INTO \(config.tableName) (
-            asset_id, pixel_width, pixel_height, creation_date, modification_date, caption, location_latitude, location_longitude, uniform_type_identifier
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            asset_id, pixel_width, pixel_height, creation_date, modification_date, caption, location_latitude, location_longitude, uniform_type_identifier, is_favorite
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (asset_id) DO UPDATE
         SET pixel_width = EXCLUDED.pixel_width,
             pixel_height = EXCLUDED.pixel_height,
@@ -327,7 +331,8 @@ final class PhotoMetadataExporter {
             caption = EXCLUDED.caption,
             location_latitude = EXCLUDED.location_latitude,
             location_longitude = EXCLUDED.location_longitude,
-            uniform_type_identifier = EXCLUDED.uniform_type_identifier;
+            uniform_type_identifier = EXCLUDED.uniform_type_identifier,
+            is_favorite = EXCLUDED.is_favorite;
         """
 
         let statement = try connection.prepareStatement(text: insertSQL)
@@ -349,7 +354,8 @@ final class PhotoMetadataExporter {
                     metadata.caption,
                     metadata.latitude,
                     metadata.longitude,
-                    metadata.uniformTypeIdentifier
+                    metadata.uniformTypeIdentifier,
+                    metadata.isFavorite
                 ]
                 try statement.execute(parameterValues: parameters)
                 processed += 1
