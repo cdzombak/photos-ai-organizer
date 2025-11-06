@@ -26,7 +26,7 @@ Key sections:
 
 - `postgres`: connection info + metadata table name
 - `mapbox`: access token for travel geocoding (optional if you skip travel pipeline)
-- `albums`: folder/name pattern for synced albums
+- `travel_albums`: folder/name pattern for synced travel albums
 - `ai`: `base_url`, `api_key`, `model` for the OpenAI-compatible service used by the `grade` subcommand
 
 ## Quickstart

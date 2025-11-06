@@ -8,7 +8,7 @@ postgres:
   auth_method: auto
 mapbox:
   access_token: pk.your-token-here
-albums:
+travel_albums:
   folder_name: Travel Clusters
   pattern: "{location} {start} – {end}"
 ai:

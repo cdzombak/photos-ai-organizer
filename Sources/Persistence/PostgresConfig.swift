@@ -84,8 +84,8 @@ public struct PostgresConfig {
             tableName: tableName,
             authMethod: postgres.authMethod ?? .auto,
             mapbox: rawConfig.mapbox,
-            albumFolderName: rawConfig.albums?.folderName ?? "Travel Clusters",
-            albumNamePattern: rawConfig.albums?.pattern,
+            albumFolderName: rawConfig.travelAlbums?.folderName ?? "Travel Clusters",
+            albumNamePattern: rawConfig.travelAlbums?.pattern,
             ai: rawConfig.ai
         )
     }
@@ -153,8 +153,15 @@ public struct PostgresConfig {
 
         public let postgres: Postgres
         public let mapbox: MapboxConfig?
-        public let albums: AlbumConfig?
+        public let travelAlbums: AlbumConfig?
         public let ai: AIConfig?
+
+        enum CodingKeys: String, CodingKey {
+            case postgres
+            case mapbox
+            case travelAlbums = "travel_albums"
+            case ai
+        }
     }
 }
 
