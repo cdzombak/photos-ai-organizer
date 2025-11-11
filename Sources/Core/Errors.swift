@@ -33,3 +33,10 @@ public final class ResultBox<Value>: @unchecked Sendable {
         self.value = value
     }
 }
+
+public final class AuthorizationStatusBox: @unchecked Sendable {
+    public var value: PHAuthorizationStatus
+    public init(_ value: PHAuthorizationStatus) {
+        self.value = value
+    }
+}

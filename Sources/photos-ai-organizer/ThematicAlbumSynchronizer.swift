@@ -1,4 +1,5 @@
 import Foundation
+import Core
 import Photos
 import Persistence
 @preconcurrency import PostgresClientKit

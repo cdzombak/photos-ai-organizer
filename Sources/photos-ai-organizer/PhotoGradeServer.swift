@@ -1,6 +1,7 @@
 import Foundation
 import NIO
 import NIOHTTP1
+import Core
 import Persistence
 @preconcurrency import PostgresClientKit
 

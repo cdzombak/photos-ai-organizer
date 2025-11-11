@@ -2,10 +2,11 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 @preconcurrency import Photos
-import Core
 
-struct PhotoLibraryAdapter: @unchecked Sendable {
-    func ensureAccess() throws {
+public struct PhotoLibraryAdapter: @unchecked Sendable {
+    public init() {}
+    
+    public func ensureAccess() throws {
         var status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         switch status {
         case .authorized, .limited:
@@ -27,7 +28,7 @@ struct PhotoLibraryAdapter: @unchecked Sendable {
         }
     }
 
-    func ensureFolder(named folderName: String) throws -> PHCollectionList {
+    public func ensureFolder(named folderName: String) throws -> PHCollectionList {
         if let existing = fetchFolder(named: folderName) {
             return existing
         }
@@ -46,7 +47,7 @@ struct PhotoLibraryAdapter: @unchecked Sendable {
         return folder
     }
 
-    func ensureAlbum(named title: String, existingIdentifier: String?, in folder: PHCollectionList) throws -> PHAssetCollection {
+    public func ensureAlbum(named title: String, existingIdentifier: String?, in folder: PHCollectionList) throws -> PHAssetCollection {
         if let existingID = existingIdentifier,
            let existingAlbum = fetchAlbum(by: existingID) {
             return existingAlbum
@@ -68,12 +69,12 @@ struct PhotoLibraryAdapter: @unchecked Sendable {
             throw ExportError.invalidArgument("Unable to create album \(title).")
         }
         guard let album = fetchAlbum(by: id) else {
-            throw ExportError.invalidArgument("Unable to load album \(title).")
+            throw ExportError.invalidArgument("Unable to create album \(title).")
         }
         return album
     }
 
-    func updateAlbum(_ album: PHAssetCollection, with assetIDs: [String]) throws {
+    public func updateAlbum(_ album: PHAssetCollection, with assetIDs: [String]) throws {
         let assetsToAdd = PHAsset.fetchAssets(withLocalIdentifiers: assetIDs, options: nil)
         let existingAssets = PHAsset.fetchAssets(in: album, options: nil)
         try PHPhotoLibrary.shared().performChangesAndWait {
@@ -88,7 +89,7 @@ struct PhotoLibraryAdapter: @unchecked Sendable {
     }
 
     @discardableResult
-    func addAssets(_ assetIDs: [String], to album: PHAssetCollection) throws -> [String] {
+    public func addAssets(_ assetIDs: [String], to album: PHAssetCollection) throws -> [String] {
         guard !assetIDs.isEmpty else { return [] }
         let existingAssets = PHAsset.fetchAssets(in: album, options: nil)
         var existingIdentifiers = Set<String>()
@@ -110,24 +111,24 @@ struct PhotoLibraryAdapter: @unchecked Sendable {
         return resolvedIDs
     }
 
-    func fetchFolder(named name: String) -> PHCollectionList? {
+    public func fetchFolder(named name: String) -> PHCollectionList? {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "title = %@", name)
         let result = PHCollectionList.fetchCollectionLists(with: .folder, subtype: .any, options: options)
         return result.firstObject
     }
 
-    func fetchFolder(by identifier: String) -> PHCollectionList? {
+    public func fetchFolder(by identifier: String) -> PHCollectionList? {
         let result = PHCollectionList.fetchCollectionLists(withLocalIdentifiers: [identifier], options: nil)
         return result.firstObject
     }
 
-    func fetchAlbum(by identifier: String) -> PHAssetCollection? {
+    public func fetchAlbum(by identifier: String) -> PHAssetCollection? {
         let result = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [identifier], options: nil)
         return result.firstObject
     }
 
-    func fetchAlbum(named name: String, in folder: PHCollectionList) -> PHAssetCollection? {
+    public func fetchAlbum(named name: String, in folder: PHCollectionList) -> PHAssetCollection? {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "title = %@", name)
         let result = PHCollectionList.fetchCollections(in: folder, options: options)
@@ -143,7 +144,7 @@ struct PhotoLibraryAdapter: @unchecked Sendable {
 }
 
 extension PhotoLibraryAdapter {
-    func assetIdentifiers(in album: PHAssetCollection) -> [String] {
+    public func assetIdentifiers(in album: PHAssetCollection) -> [String] {
         let assets = PHAsset.fetchAssets(in: album, options: nil)
         var identifiers: [String] = []
         assets.enumerateObjects { asset, _, _ in
@@ -153,7 +154,7 @@ extension PhotoLibraryAdapter {
     }
 
     @discardableResult
-    func removeAssets(_ assetIDs: [String], from album: PHAssetCollection) throws -> Int {
+    public func removeAssets(_ assetIDs: [String], from album: PHAssetCollection) throws -> Int {
         guard !assetIDs.isEmpty else { return 0 }
         let assets = PHAsset.fetchAssets(withLocalIdentifiers: assetIDs, options: nil)
         guard assets.count > 0 else { return 0 }
@@ -166,7 +167,7 @@ extension PhotoLibraryAdapter {
 }
 
 extension PhotoLibraryAdapter {
-    func fetchAssets(with identifiers: [String]) -> [PHAsset] {
+    public func fetchAssets(with identifiers: [String]) -> [PHAsset] {
         guard !identifiers.isEmpty else { return [] }
         let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
         var assets: [PHAsset] = []
@@ -176,7 +177,7 @@ extension PhotoLibraryAdapter {
         return assets
     }
 
-    func resizedImageData(for asset: PHAsset, maxDimension: CGFloat) -> Data? {
+    public func resizedImageData(for asset: PHAsset, maxDimension: CGFloat) -> Data? {
         let options = PHImageRequestOptions()
         options.isSynchronous = true
         options.deliveryMode = .highQualityFormat
@@ -203,7 +204,7 @@ extension PhotoLibraryAdapter {
         return destinationData as Data
     }
 
-    func base64JPEG(for assetID: String, maxDimension: CGFloat) -> String? {
+    public func base64JPEG(for assetID: String, maxDimension: CGFloat) -> String? {
         let assets = fetchAssets(with: [assetID])
         guard let asset = assets.first, let data = resizedImageData(for: asset, maxDimension: maxDimension) else {
             return nil
@@ -213,7 +214,7 @@ extension PhotoLibraryAdapter {
 }
 
 extension PhotoLibraryAdapter {
-    func fetchAssets() -> PHFetchResult<PHAsset> {
+    public func fetchAssets() -> PHFetchResult<PHAsset> {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "mediaType == %d AND isHidden == NO", PHAssetMediaType.image.rawValue)
         options.includeHiddenAssets = false
