@@ -327,8 +327,10 @@ private extension FacePipelineCommand {
             minimumConfidence: faceDetectionMinConfidence
         )
         do {
+            print("   🔄 [\(assetIdentifier)] Detecting faces…")
             let faceDetections = try await detectionService.detectFaces(in: asset)
             if faceDetections.isEmpty {
+                print("   👁️ [\(assetIdentifier)] No faces detected")
                 return PhotoProcessingResult(
                     assetID: assetIdentifier,
                     detections: [],
@@ -338,6 +340,7 @@ private extension FacePipelineCommand {
                     errorDescription: nil
                 )
             }
+            print("   👁️ [\(assetIdentifier)] Detected \(faceDetections.count) face(s)")
             var processed: [FaceDetection] = []
             var warnings: [String] = []
             for (index, detection) in faceDetections.enumerated() {
@@ -355,6 +358,7 @@ private extension FacePipelineCommand {
                     warnings.append("Failed to process face \(index + 1): \(error)")
                 }
             }
+            print("   🧠 [\(assetIdentifier)] Generated \(processed.count) embedding(s)")
             return PhotoProcessingResult(
                 assetID: assetIdentifier,
                 detections: processed,
