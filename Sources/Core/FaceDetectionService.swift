@@ -28,14 +28,11 @@ public struct FaceDetectionService {
         
         return try await detectFacesInImageData(imageData, assetID: asset.localIdentifier)
     }
-    
+
     public func extractFaceImage(from asset: PHAsset, boundingBox: CGRect) async throws -> CGImage? {
         guard let imageData = try await getImageData(for: asset),
-              let source = CGImageSourceCreateWithData(imageData as CFData, nil) else {
-            return nil
-        }
-        
-        guard let fullImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+              let source = CGImageSourceCreateWithData(imageData as CFData, nil),
+              let fullImage = FaceDetectionService.createOrientedImage(from: source) else {
             return nil
         }
         
@@ -92,9 +89,11 @@ public struct FaceDetectionService {
     }
     
     private func detectFacesInImageData(_ imageData: Data, assetID: String) async throws -> [FaceDetection] {
-        guard let image = CIImage(data: imageData) else {
+        guard let source = CGImageSourceCreateWithData(imageData as CFData, nil),
+              let cgImage = FaceDetectionService.createOrientedImage(from: source) else {
             return []
         }
+        let image = CIImage(cgImage: cgImage)
         
         return try await withCheckedThrowingContinuation { continuation in
             let request = VNDetectFaceRectanglesRequest { request, error in
@@ -131,5 +130,22 @@ public struct FaceDetectionService {
                 }
             }
         }
+    }
+
+    private static func createOrientedImage(from source: CGImageSource) -> CGImage? {
+        guard let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            return nil
+        }
+
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let orientationRaw = properties[kCGImagePropertyOrientation] as? UInt32,
+              let orientation = CGImagePropertyOrientation(rawValue: orientationRaw),
+              orientation != .up else {
+            return cgImage
+        }
+
+        let ciImage = CIImage(cgImage: cgImage).oriented(orientation)
+        let context = CIContext(options: [.useSoftwareRenderer: false])
+        return context.createCGImage(ciImage, from: ciImage.extent)
     }
 }
