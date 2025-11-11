@@ -469,6 +469,48 @@ public final class FaceStore {
         return nil
     }
 
+    public func getProcessingStatus(for assetID: String, connection: Connection) throws -> FaceProcessingStatus? {
+        let sql = """
+        SELECT asset_id, faces_detected, processed_at
+        FROM face_detection_status
+        WHERE asset_id = $1
+        LIMIT 1;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute(parameterValues: [assetID])
+        for row in cursor {
+            let resolved = try row.get()
+            guard let id = try resolved.columns[0].optionalString(),
+                  let faces = try resolved.columns[1].optionalInt(),
+                  let processedAt = try resolved.columns[2].optionalTimestampWithTimeZone()?.date else {
+                continue
+            }
+            return FaceProcessingStatus(assetID: id, processedAt: processedAt, facesDetected: faces)
+        }
+
+        return nil
+    }
+
+    public func upsertProcessingStatus(assetID: String, facesDetected: Int, connection: Connection) throws {
+        let sql = """
+        INSERT INTO face_detection_status (asset_id, faces_detected, processed_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (asset_id)
+        DO UPDATE SET faces_detected = EXCLUDED.faces_detected, processed_at = NOW();
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute(parameterValues: [assetID, facesDetected])
+    }
+
+    public func deleteProcessingStatus(for assetID: String, connection: Connection) throws {
+        let sql = "DELETE FROM face_detection_status WHERE asset_id = $1;"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute(parameterValues: [assetID])
+    }
 }
 
 public struct FaceProcessingStatus: Sendable {
