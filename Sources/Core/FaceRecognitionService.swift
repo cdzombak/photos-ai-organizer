@@ -8,7 +8,7 @@ import Accelerate
 public final class FaceRecognitionService {
     public static let embeddingDimension = 512
     public static let similarityThreshold: Float = 0.6
-    private static let defaultModelRelativePath = "Sources/Core/Models/FaceNet.mlmodel"
+    private static let defaultModelRelativePath = "Sources/Core/Models/facenet_vggface2.mlpackage"
 
     public enum ColorChannelOrder {
         case rgb
@@ -32,7 +32,7 @@ public final class FaceRecognitionService {
         for candidate in candidateModelURLs(overrideURL: overrideURL, fileManager: fileManager) {
             do {
                 let compiledURL: URL
-                if candidate.pathExtension == "mlmodelc" {
+                if candidate.pathExtension == "mlmodelc" || candidate.pathExtension == "mlpackage" {
                     compiledURL = candidate
                 } else if candidate.pathExtension == "mlmodel" {
                     compiledURL = try MLModel.compileModel(at: candidate)
@@ -66,24 +66,15 @@ public final class FaceRecognitionService {
         }
 
         let hostingBundle = Bundle(for: FaceRecognitionService.self)
-        if let bundleURL = hostingBundle.url(forResource: "FaceNet", withExtension: "mlmodelc") {
+        if let bundleURL = hostingBundle.url(forResource: "facenet_vggface2", withExtension: "mlpackage") {
             candidates.append(bundleURL)
         }
-        if let bundleModelURL = hostingBundle.url(forResource: "FaceNet", withExtension: "mlmodel") {
-            candidates.append(bundleModelURL)
-        }
-        if let mainURL = Bundle.main.url(forResource: "FaceNet", withExtension: "mlmodelc") {
+        if let mainURL = Bundle.main.url(forResource: "facenet_vggface2", withExtension: "mlpackage") {
             candidates.append(mainURL)
         }
-        if let mainModelURL = Bundle.main.url(forResource: "FaceNet", withExtension: "mlmodel") {
-            candidates.append(mainModelURL)
+        if fileManager.fileExists(atPath: defaultModelRelativePath) {
+            candidates.append(URL(fileURLWithPath: fileManager.currentDirectoryPath).appendingPathComponent(defaultModelRelativePath))
         }
-
-        let cwdURL = URL(fileURLWithPath: fileManager.currentDirectoryPath).appendingPathComponent(defaultModelRelativePath)
-        if fileManager.fileExists(atPath: cwdURL.path) {
-            candidates.append(cwdURL)
-        }
-
         if let projectRoot = projectRootModelURL(), fileManager.fileExists(atPath: projectRoot.path) {
             candidates.append(projectRoot)
         }
@@ -99,7 +90,6 @@ public final class FaceRecognitionService {
         url.appendPathComponent(defaultModelRelativePath)
         return url
     }
-    
     public func generateEmbedding(for faceImage: CGImage) async throws -> [Float] {
         if model == nil {
             self.model = FaceRecognitionService.loadFaceNetModel(overrideURL: providedModelURL)

@@ -12,16 +12,16 @@ This guide covers how to use the new face recognition system to detect faces in 
 
 ### FaceNet Model Location
 
-The face recognition system uses FaceNet for generating face embeddings. Place your FaceNet model file at:
+The face recognition system uses FaceNet for generating face embeddings. Place your FaceNet model package at:
 
 ```
-Sources/Core/Models/FaceNet.mlmodel
+Sources/Core/Models/facenet_vggface2.mlpackage
 ```
 
 ### Getting the FaceNet Model
 
-1. Download a pre-trained FaceNet model compatible with CoreML
-2. Convert it to `.mlmodel` format if necessary
+1. Download a pre-trained FaceNet model compatible with CoreML (the project currently expects the `facenet_vggface2` `.mlpackage` bundle)
+2. If you have a `.mlmodel` file, convert it to an `.mlpackage` (compiled) format first
 3. Place it in the location above
 
 Once the model is in place, the CLI will automatically load it and generate real FaceNet embeddings during `process-faces` runs.
@@ -113,7 +113,7 @@ Add these optional settings to your `photos-config.yml`:
 ```yaml
 # Face recognition settings
 face_recognition:
-  model_path: "Sources/Core/Models/FaceNet.mlmodel"
+  model_path: "Sources/Core/Models/facenet_vggface2.mlpackage"
   similarity_threshold: 0.6
   min_cluster_size: 3
   max_cluster_size: 50
@@ -134,7 +134,7 @@ table_name: "photo_metadata"
 
 1. **"No such module 'ArgumentParser'"**: Run `swift package update` to fetch dependencies
 2. **"Photo library access denied"**: Grant photo library permissions when prompted
-3. **"FaceNet model not found"**: Ensure the model file is at the correct path
+3. **"FaceNet model not found"**: Ensure the model package is at the correct path
 4. **Memory issues**: Use `--max-photos` to process in smaller batches
 
 ### Debug Mode
