@@ -203,29 +203,17 @@ struct FacePipelineCommand: AsyncParsableCommand {
     private func printClusterQualityStats(
         clusteringService: FaceClusteringService,
         faceStore: FaceStore,
-        connection: Connection,
-        maxPersonsToEvaluate: Int = 200
+        connection: Connection
     ) async {
         do {
             let allPersons = try faceStore.getAllActivePersons(connection: connection)
-            guard !allPersons.isEmpty else {
-                print("\n📈 Cluster Quality Statistics: no persons to evaluate.")
-                return
-            }
-
-            if allPersons.count > maxPersonsToEvaluate {
-                print("\n📈 Cluster Quality Statistics: skipping detailed evaluation (\(allPersons.count) persons > \(maxPersonsToEvaluate) limit).")
-                print("   Consider rerunning with --max-photos or --after-date to focus on a subset if detailed stats are needed.")
-                return
-            }
-
             var qualityScores: [Float] = []
             var lowQualityClusters: Int = 0
-
+            
             for person in allPersons {
                 let quality = try await clusteringService.computeClusterQuality(for: person.id, connection: connection)
                 qualityScores.append(quality)
-
+                
                 if quality < 0.5 {
                     lowQualityClusters += 1
                 }
