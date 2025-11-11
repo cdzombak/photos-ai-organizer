@@ -210,12 +210,18 @@ private final class FaceDataProvider: @unchecked Sendable {
     func fetchPersonSummaries() throws -> [FacePersonSummary] {
         try withConnection { connection in
             let sql = """
-            SELECT p.id, p.name, p.created_at, p.updated_at, COUNT(fd.id) AS face_count,
-                   MIN(fd.id) AS sample_face_id
+            SELECT p.id, p.name, p.created_at, p.updated_at,
+                   COALESCE(fc.face_count, 0) AS face_count,
+                   fc.sample_face_id
             FROM persons p
-            LEFT JOIN face_detections fd ON fd.person_id = p.id
+            LEFT JOIN LATERAL (
+                SELECT fd.id AS sample_face_id, COUNT(fd.id) OVER () AS face_count
+                FROM face_detections fd
+                WHERE fd.person_id = p.id
+                ORDER BY fd.created_at ASC
+                LIMIT 1
+            ) fc ON true
             WHERE p.is_active = true
-            GROUP BY p.id
             ORDER BY p.created_at ASC;
             """
             let statement = try connection.prepareStatement(text: sql)
@@ -261,9 +267,15 @@ private final class FaceDataProvider: @unchecked Sendable {
             persons.forEach { nameLookup[$0.id] = $0.name ?? "Person \($0.id.uuidString.prefix(6))" }
 
             let sql = """
-            SELECT person_id, COUNT(id) AS face_count, MIN(id) AS sample_face_id
-            FROM face_detections
-            GROUP BY person_id
+            SELECT person_id, face_count, sample_face_id
+            FROM (
+                SELECT person_id,
+                       COUNT(*) OVER (PARTITION BY person_id) AS face_count,
+                       FIRST_VALUE(id) OVER (PARTITION BY person_id ORDER BY created_at ASC) AS sample_face_id,
+                       ROW_NUMBER() OVER (PARTITION BY person_id ORDER BY created_at ASC) AS row_number
+                FROM face_detections
+            ) ranked
+            WHERE row_number = 1
             ORDER BY face_count DESC;
             """
             let statement = try connection.prepareStatement(text: sql)
