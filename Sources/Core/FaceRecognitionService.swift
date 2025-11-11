@@ -32,9 +32,10 @@ public final class FaceRecognitionService {
         for candidate in candidateModelURLs(overrideURL: overrideURL, fileManager: fileManager) {
             do {
                 let compiledURL: URL
-                if candidate.pathExtension == "mlmodelc" || candidate.pathExtension == "mlpackage" {
+                let ext = candidate.pathExtension.lowercased()
+                if ext == "mlmodelc" {
                     compiledURL = candidate
-                } else if candidate.pathExtension == "mlmodel" {
+                } else if ext == "mlmodel" || ext == "mlpackage" {
                     compiledURL = try MLModel.compileModel(at: candidate)
                 } else {
                     searchErrors.append("Unsupported extension for \(candidate.lastPathComponent)")
