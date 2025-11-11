@@ -38,6 +38,7 @@ struct FacePipelineCommand: AsyncParsableCommand {
         // Load configuration
         let config = try PostgresConfig.fromConfigFile(path: configPath)
         let faceDetectionMinConfidence = config.faceDetectionMinConfidence ?? FaceDetectionService.defaultConfidenceThreshold
+        let faceRecognitionSimilarityThreshold = config.faceRecognitionSimilarityThreshold ?? FaceRecognitionService.similarityThreshold
         let connectionConfig = try config.makeConnectionConfiguration()
         
         // Establish database connection
@@ -53,7 +54,8 @@ struct FacePipelineCommand: AsyncParsableCommand {
         let faceStore = FaceStore(config: config)
         let clusteringService = FaceClusteringService(
             faceStore: faceStore,
-            recognitionService: faceRecognitionService
+            recognitionService: faceRecognitionService,
+            similarityThreshold: faceRecognitionSimilarityThreshold
         )
         
         // Request Photos library access

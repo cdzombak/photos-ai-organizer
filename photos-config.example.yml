@@ -36,4 +36,7 @@ ai:
     model: meta-llama/llama-4-thematic
 
 face_detection:
-  min_confidence: 0.85
+  min_confidence: 0.8
+
+face_recognition:
+  similarity_threshold: 0.6

@@ -61,33 +61,44 @@ public final class FaceRecognitionService {
     private static func candidateModelURLs(overrideURL: URL?, fileManager: FileManager) -> [URL] {
         var candidates: [URL] = []
 
+        func appendIfAvailable(_ url: URL?) {
+            if let url, fileManager.fileExists(atPath: url.path) {
+                candidates.append(url)
+            }
+        }
+
         if let overrideURL {
             candidates.append(overrideURL)
         }
 
         let hostingBundle = Bundle(for: FaceRecognitionService.self)
-        if let bundleURL = hostingBundle.url(forResource: "facenet_vggface2", withExtension: "mlpackage") {
-            candidates.append(bundleURL)
-        }
-        if let mainURL = Bundle.main.url(forResource: "facenet_vggface2", withExtension: "mlpackage") {
-            candidates.append(mainURL)
-        }
-        if fileManager.fileExists(atPath: defaultModelRelativePath) {
-            candidates.append(URL(fileURLWithPath: fileManager.currentDirectoryPath).appendingPathComponent(defaultModelRelativePath))
-        }
-        if let projectRoot = projectRootModelURL(), fileManager.fileExists(atPath: projectRoot.path) {
-            candidates.append(projectRoot)
+        appendIfAvailable(hostingBundle.url(forResource: "facenet_vggface2", withExtension: "mlpackage"))
+        appendIfAvailable(hostingBundle.url(forResource: "facenet_vggface2", withExtension: "mlmodel"))
+        appendIfAvailable(hostingBundle.url(forResource: "facenet_vggface2", withExtension: "mlmodelc"))
+
+        appendIfAvailable(Bundle.main.url(forResource: "facenet_vggface2", withExtension: "mlpackage"))
+        appendIfAvailable(Bundle.main.url(forResource: "facenet_vggface2", withExtension: "mlmodel"))
+        appendIfAvailable(Bundle.main.url(forResource: "facenet_vggface2", withExtension: "mlmodelc"))
+
+        let relativePaths = [
+            "Sources/Core/Models/facenet_vggface2.mlpackage",
+            "Sources/Core/Models/facenet_vggface2.mlmodel",
+            "Sources/Core/Models/facenet_vggface2.mlmodelc"
+        ]
+        for path in relativePaths {
+            appendIfAvailable(URL(fileURLWithPath: fileManager.currentDirectoryPath).appendingPathComponent(path))
+            appendIfAvailable(projectRootModelURL(relativePath: path))
         }
 
         return candidates
     }
 
-    private static func projectRootModelURL() -> URL? {
+    private static func projectRootModelURL(relativePath: String = defaultModelRelativePath) -> URL? {
         var url = URL(fileURLWithPath: #filePath)
         url.deleteLastPathComponent()
         url.deleteLastPathComponent()
         url.deleteLastPathComponent()
-        url.appendPathComponent(defaultModelRelativePath)
+        url.appendPathComponent(relativePath)
         return url
     }
     public func generateEmbedding(for faceImage: CGImage) async throws -> [Float] {

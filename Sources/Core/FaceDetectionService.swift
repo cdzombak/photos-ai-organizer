@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 @preconcurrency import Photos
 
 public struct FaceDetectionService {
-    public static let defaultConfidenceThreshold: Float = 0.85
+    public static let defaultConfidenceThreshold: Float = 0.8
 
     private let photoLibraryAdapter: PhotoLibraryAdapter
     private let confidenceThreshold: Float

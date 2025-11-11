@@ -20,6 +20,7 @@ public struct PostgresConfig {
     public let gradingAI: AIConfig?
     public let thematicAI: AIConfig?
     public let faceDetectionMinConfidence: Float?
+    public let faceRecognitionSimilarityThreshold: Float?
 
     public enum AuthMethod: Decodable {
         case auto
@@ -94,7 +95,8 @@ public struct PostgresConfig {
             thematicFolderName: rawConfig.thematicFolder ?? "Thematic Albums",
             gradingAI: rawConfig.ai?.grade,
             thematicAI: rawConfig.ai?.thematic ?? rawConfig.ai?.grade,
-            faceDetectionMinConfidence: rawConfig.faceDetection?.minConfidence
+            faceDetectionMinConfidence: rawConfig.faceDetection?.minConfidence,
+            faceRecognitionSimilarityThreshold: rawConfig.faceRecognition?.similarityThreshold
         )
     }
 
@@ -166,6 +168,7 @@ public struct PostgresConfig {
         public let thematicFolder: String?
         public let ai: AISection?
         public let faceDetection: FaceDetectionConfig?
+        public let faceRecognition: FaceRecognitionConfig?
 
         enum CodingKeys: String, CodingKey {
             case postgres
@@ -175,6 +178,7 @@ public struct PostgresConfig {
             case thematicFolder = "thematic_folder"
             case ai
             case faceDetection = "face_detection"
+            case faceRecognition = "face_recognition"
         }
     }
 }
@@ -224,5 +228,19 @@ public struct FaceDetectionConfig: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case minConfidence = "min_confidence"
+    }
+}
+
+public struct FaceRecognitionConfig: Decodable {
+    public let similarityThreshold: Float?
+    public let modelPath: String?
+    public let minClusterSize: Int?
+    public let maxClusterSize: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case similarityThreshold = "similarity_threshold"
+        case modelPath = "model_path"
+        case minClusterSize = "min_cluster_size"
+        case maxClusterSize = "max_cluster_size"
     }
 }

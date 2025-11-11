@@ -41,6 +41,7 @@ Key sections:
 - `ai.grade`: `base_url`, `api_key`, `model` for the grading pipeline
 - `ai.thematic`: optional override (same fields as above) for the thematic pipeline; falls back to `ai.grade` when omitted
 - `face_detection`: optional `min_confidence` (0–1) used to ignore low-confidence Vision detections in the face pipeline
+- `face_recognition`: optional `similarity_threshold` (0–1) that controls how strict the clustering step is when comparing embeddings
 
 ## Quickstart
 

@@ -120,13 +120,15 @@ face_recognition:
 
 # Face detection filtering
 face_detection:
-  min_confidence: 0.85
+  min_confidence: 0.8
 
 # Database table overrides (optional)
 table_name: "photo_metadata"
 ```
 
-`face_detection.min_confidence` lets you discard low-confidence Vision detections so only high-quality faces are saved and clustered. Set it between 0 and 1 (default 0.85).
+`face_detection.min_confidence` lets you discard low-confidence Vision detections so only high-quality faces are saved and clustered. Set it between 0 and 1 (default 0.8).
+
+`face_recognition.similarity_threshold` controls how similar two embeddings must be (cosine similarity) before we consider them the same person during clustering. The default 0.6 is a common starting point for FaceNet-style embeddings, but you can nudge it up for stricter clusters or down if the model misses matches.
 
 ## Troubleshooting
 
