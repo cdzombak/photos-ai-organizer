@@ -209,8 +209,10 @@ struct FacePipelineCommand: AsyncParsableCommand {
             let allPersons = try faceStore.getAllActivePersons(connection: connection)
             var qualityScores: [Float] = []
             var lowQualityClusters: Int = 0
+            let reporter = ProgressReporter(total: allPersons.count, label: "Evaluating cluster quality", interval: max(1, allPersons.count / 100))
             
-            for person in allPersons {
+            for (index, person) in allPersons.enumerated() {
+                reporter.advance(to: index + 1)
                 let quality = try await clusteringService.computeClusterQuality(for: person.id, connection: connection)
                 qualityScores.append(quality)
                 
@@ -218,6 +220,7 @@ struct FacePipelineCommand: AsyncParsableCommand {
                     lowQualityClusters += 1
                 }
             }
+            reporter.finish()
             
             if !qualityScores.isEmpty {
                 let averageQuality = qualityScores.reduce(0, +) / Float(qualityScores.count)
