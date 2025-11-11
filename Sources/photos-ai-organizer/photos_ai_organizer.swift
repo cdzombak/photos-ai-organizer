@@ -11,33 +11,7 @@ import CryptoKit
 import PostgresClientKit
 import Yams
 
-// MARK: - Errors
-
-enum ExportError: Error, CustomStringConvertible {
-    case authorizationDenied(PHAuthorizationStatus)
-    case missingConfigFile(String)
-    case invalidConfig(String)
-    case invalidIdentifier(String)
-    case invalidArgument(String)
-    case missingPassword(String)
-
-    var description: String {
-        switch self {
-        case .authorizationDenied(let status):
-            return "Photo library access denied (status: \(status.rawValue)). Re-run after granting access."
-        case .missingConfigFile(let path):
-            return "Config file not found at \(path). Provide one with --config or create photos-config.yml."
-        case .invalidConfig(let message):
-            return "Invalid config: \(message)"
-        case .invalidIdentifier(let value):
-            return "Invalid table name '\(value)'. Use letters, numbers, or underscores and start with a letter/underscore."
-        case .invalidArgument(let message):
-            return message
-        case .missingPassword(let context):
-            return "Missing password for \(context). Provide one in your config."
-        }
-    }
-}
+// MARK: - Errors (ExportError is defined in Core module)
 
 // MARK: - CLI Options
 
@@ -49,7 +23,12 @@ enum CLICommand: String {
     case syncThematicAlbums = "sync-thematic-albums"
     case grade = "grade"
     case serveGrades = "serve-grades"
+    case serveFaces = "serve-faces"
     case help = "help"
+}
+
+private enum FacePipelineSupport {
+    static let commandName = FacePipelineCommand.configuration.commandName ?? "process-faces"
 }
 
 struct CLIOptions {
@@ -59,6 +38,7 @@ struct CLIOptions {
     let thematicConcurrency: Int?
     let restoreRemovals: Bool
     let dangerRemove: Bool
+    let serverPort: Int?
 
     init(arguments: [String]) throws {
         var configPath = "photos-config.yml"
@@ -67,6 +47,7 @@ struct CLIOptions {
         var thematicConcurrency: Int?
         var restoreRemovals = false
         var dangerRemove = false
+        var serverPort: Int?
 
         let args = Array(arguments.dropFirst())
         var index = args.startIndex
@@ -119,6 +100,22 @@ struct CLIOptions {
                     throw ExportError.invalidArgument("--danger-remove can only be used with 'sync-travel-albums' or 'sync-thematic-albums'")
                 }
                 dangerRemove = true
+            case "--port":
+                let valueIndex = args.index(after: index)
+                guard args.indices.contains(valueIndex) else {
+                    throw ExportError.invalidArgument("--port requires a value (e.g. --port 8081)")
+                }
+                guard let currentCommand = command else {
+                    throw ExportError.invalidArgument("Specify a subcommand before --port")
+                }
+                guard currentCommand == .serveGrades || currentCommand == .serveFaces else {
+                    throw ExportError.invalidArgument("--port can only be used with 'serve-grades' or 'serve-faces'")
+                }
+                guard let portValue = Int(args[valueIndex]), (1...65535).contains(portValue) else {
+                    throw ExportError.invalidArgument("--port expects an integer between 1 and 65535")
+                }
+                serverPort = portValue
+                index = valueIndex
             default:
                 if argument.hasPrefix("--") {
                     throw ExportError.invalidArgument("Unknown option \(argument)")
@@ -126,7 +123,7 @@ struct CLIOptions {
                 if command == nil, let parsed = CLICommand(rawValue: argument) {
                     command = parsed
                 } else if command == nil {
-                    throw ExportError.invalidArgument("Unknown subcommand '\(argument)'. Try 'import', 'run-travel-pipeline', 'sync-travel-albums', or 'help'.")
+                    throw ExportError.invalidArgument("Unknown subcommand '\(argument)'. Try 'import', 'run-travel-pipeline', 'sync-travel-albums', '\(FacePipelineSupport.commandName)', or 'help'.")
                 } else {
                     throw ExportError.invalidArgument("Unexpected argument '\(argument)'.")
                 }
@@ -140,18 +137,11 @@ struct CLIOptions {
         self.thematicConcurrency = thematicConcurrency
         self.restoreRemovals = restoreRemovals
         self.dangerRemove = dangerRemove
+        self.serverPort = serverPort
     }
 }
 
-// MARK: - Concurrency Helpers
-
-final class AuthorizationStatusBox: @unchecked Sendable {
-    var value: PHAuthorizationStatus
-
-    init(_ value: PHAuthorizationStatus) {
-        self.value = value
-    }
-}
+// MARK: - Concurrency Helpers (AuthorizationStatusBox is defined in Core module)
 
 final class DataResultBox: @unchecked Sendable {
     var value: Result<Data, Error>?
@@ -671,8 +661,11 @@ final class TravelAlbumSynchronizer {
 
 @main
 struct PhotosMetadataExporterCLI {
-    static func main() {
+    static func main() async {
         do {
+            if try await maybeRunFacePipeline(arguments: CommandLine.arguments) {
+                return
+            }
             let options = try CLIOptions(arguments: CommandLine.arguments)
             let config = try PostgresConfig.fromConfigFile(path: options.configPath)
             let exporter = PhotoMetadataExporter(config: config)
@@ -711,7 +704,10 @@ struct PhotosMetadataExporterCLI {
                 print(summary)
             case .serveGrades:
                 let server = PhotoGradeServer(config: config)
-                try server.run()
+                try server.run(port: options.serverPort ?? 8080)
+            case .serveFaces:
+                let server = FaceWebServer(config: config)
+                try server.run(port: options.serverPort ?? 8081)
             case .help:
                 printHelp()
             }
@@ -723,12 +719,44 @@ struct PhotosMetadataExporterCLI {
     }
 }
 
+private extension PhotosMetadataExporterCLI {
+    static func maybeRunFacePipeline(arguments: [String]) async throws -> Bool {
+        guard let index = arguments.firstIndex(of: FacePipelineSupport.commandName) else {
+            return false
+        }
+        var forwarded: [String] = []
+
+        // Capture global config options that appear before the subcommand
+        var cursor = arguments.index(after: arguments.startIndex)
+        while cursor < index {
+            let arg = arguments[cursor]
+            switch arg {
+            case "--config", "--config-path", "-c":
+                let valueIndex = arguments.index(after: cursor)
+                guard valueIndex < index else {
+                    throw ExportError.invalidArgument("\(arg) requires a value before '\(FacePipelineSupport.commandName)'")
+                }
+                forwarded.append("--config")
+                forwarded.append(arguments[valueIndex])
+                cursor = valueIndex
+            default:
+                throw ExportError.invalidArgument("Option \(arg) must appear after '\(FacePipelineSupport.commandName)' when using that subcommand")
+        }
+        cursor = arguments.index(after: cursor)
+    }
+
+        forwarded.append(contentsOf: arguments[arguments.index(after: index)..<arguments.endIndex])
+        await FacePipelineCommand.main(forwarded)
+        return true
+    }
+}
+
 private func printHelp() {
     let text = """
 photos-ai-organizer
 
 USAGE:
-  photos-ai-organizer [--config <file>] [--table <name>] <subcommand>
+  photos-ai-organizer <subcommand> [--config <file>] [subcommand options]
 
 SUBCOMMANDS:
   import               Scan Photos and upsert metadata into Postgres.
@@ -738,13 +766,15 @@ SUBCOMMANDS:
   sync-thematic-albums  Create/update thematic albums in Photos. (--restore-removals, --danger-remove)
   grade                Send Photos to an AI model for 0–10 quality grading. (--concurrency N)
   serve-grades         Run a simple web server previewing graded photos.
+  serve-faces          Review detected persons and clusters in a browser.
+  \(FacePipelineSupport.commandName)        Detect faces in photos and cluster them into persons.
   help                 Show this message.
 
 OPTIONS:
   --config <file>   Path to YAML config (default: photos-config.yml)
-  --table <name>    Override metadata table (default: photo_metadata)
   --restore-removals  Allow sync commands to recreate deleted albums or re-add user removed assets.
   --danger-remove     Allow sync commands to delete assets from Photos when they are not in the database.
+  --port <number>   Override port for 'serve-grades' or 'serve-faces' (default: 8080 / 8081)
   --help, -h        Display help without running a subcommand
 
 EXAMPLES:
@@ -753,6 +783,8 @@ EXAMPLES:
   photos-ai-organizer sync-travel-albums --config travel.yml
   photos-ai-organizer run-thematic-pipeline --config photos-config.yml
   photos-ai-organizer sync-thematic-albums --config photos-config.yml
+  photos-ai-organizer \(FacePipelineSupport.commandName) --config photos-config.yml
+  photos-ai-organizer serve-faces --config photos-config.yml --port 8090
 """
     print(text)
 }
