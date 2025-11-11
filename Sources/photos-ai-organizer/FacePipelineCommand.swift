@@ -133,7 +133,7 @@ struct FacePipelineCommand: AsyncParsableCommand {
         var stats = ProcessingStats()
         guard !photos.isEmpty else { return stats }
         
-        let scanReporter = ProgressReporter(total: photos.count, label: "Scanning photos", interval: max(1, photos.count / 1000))
+        let scanReporter = ProgressReporter(total: photos.count, label: "Scanning photos", interval: max(1, photos.count / 100))
         var assetsToProcess: [PHAsset] = []
         
         for (index, photo) in photos.enumerated() {
