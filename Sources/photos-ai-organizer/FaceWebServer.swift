@@ -318,21 +318,14 @@ private final class FaceThumbnailProvider: @unchecked Sendable {
     private func cropFace(from image: CGImage, boundingBox: CGRect) -> CGImage? {
         let width = CGFloat(image.width)
         let height = CGFloat(image.height)
-        var rect = CGRect(
-            x: boundingBox.origin.x * width,
-            y: boundingBox.origin.y * height,
-            width: boundingBox.size.width * width,
-            height: boundingBox.size.height * height
-        )
-        rect = rect.standardized
+        var rect = convertNormalizedBoundingBoxToPixelRect(boundingBox, imageWidth: width, imageHeight: height)
+        guard !rect.isEmpty else { return nil }
         let padding: CGFloat = 0.15
         rect = rect.insetBy(dx: -rect.width * padding, dy: -rect.height * padding)
-        rect.origin.x = max(0, rect.origin.x)
-        rect.origin.y = max(0, rect.origin.y)
-        rect.size.width = min(width - rect.origin.x, rect.size.width)
-        rect.size.height = min(height - rect.origin.y, rect.size.height)
-        let integralRect = rect.integral
-        return image.cropping(to: integralRect)
+        let bounds = CGRect(x: 0, y: 0, width: width, height: height)
+        rect = rect.intersection(bounds)
+        guard !rect.isEmpty else { return nil }
+        return image.cropping(to: rect.integral)
     }
 
     private func scaleImage(_ image: CGImage, maxDimension: CGFloat) -> CGImage? {
@@ -368,6 +361,16 @@ private final class FaceThumbnailProvider: @unchecked Sendable {
         CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { return nil }
         return data as Data
+    }
+
+    private func convertNormalizedBoundingBoxToPixelRect(_ boundingBox: CGRect, imageWidth: CGFloat, imageHeight: CGFloat) -> CGRect {
+        let width = boundingBox.width * imageWidth
+        let height = boundingBox.height * imageHeight
+        let x = boundingBox.minX * imageWidth
+        let y = (1 - boundingBox.minY - boundingBox.height) * imageHeight
+        let rect = CGRect(x: x, y: y, width: width, height: height)
+        let bounds = CGRect(x: 0, y: 0, width: imageWidth, height: imageHeight)
+        return rect.intersection(bounds)
     }
 }
 

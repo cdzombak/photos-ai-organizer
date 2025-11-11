@@ -73,13 +73,22 @@ public final class FaceRecognitionService {
         }
 
         let hostingBundle = Bundle(for: FaceRecognitionService.self)
-        appendIfAvailable(hostingBundle.url(forResource: "facenet_vggface2", withExtension: "mlpackage"))
-        appendIfAvailable(hostingBundle.url(forResource: "facenet_vggface2", withExtension: "mlmodel"))
-        appendIfAvailable(hostingBundle.url(forResource: "facenet_vggface2", withExtension: "mlmodelc"))
+        let bundlePaths = [
+            "facenet_vggface2.mlpackage",
+            "facenet_vggface2.mlmodel",
+            "facenet_vggface2.mlmodelc"
+        ]
+        if let resourceURL = hostingBundle.resourceURL {
+            for path in bundlePaths {
+                appendIfAvailable(resourceURL.appendingPathComponent(path))
+            }
+        }
 
-        appendIfAvailable(Bundle.main.url(forResource: "facenet_vggface2", withExtension: "mlpackage"))
-        appendIfAvailable(Bundle.main.url(forResource: "facenet_vggface2", withExtension: "mlmodel"))
-        appendIfAvailable(Bundle.main.url(forResource: "facenet_vggface2", withExtension: "mlmodelc"))
+        if let mainResourceURL = Bundle.main.resourceURL {
+            for path in bundlePaths {
+                appendIfAvailable(mainResourceURL.appendingPathComponent(path))
+            }
+        }
 
         let relativePaths = [
             "Sources/Core/Models/facenet_vggface2.mlpackage",

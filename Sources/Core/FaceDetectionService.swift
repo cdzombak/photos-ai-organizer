@@ -43,27 +43,34 @@ public struct FaceDetectionService {
         let imageWidth = CGFloat(fullImage.width)
         let imageHeight = CGFloat(fullImage.height)
         
-        let pixelRect = CGRect(
-            x: boundingBox.origin.x * imageWidth,
-            y: boundingBox.origin.y * imageHeight,
-            width: boundingBox.size.width * imageWidth,
-            height: boundingBox.size.height * imageHeight
+        let pixelRect = convertNormalizedBoundingBoxToPixelRect(
+            boundingBox,
+            imageWidth: imageWidth,
+            imageHeight: imageHeight
         )
+        guard !pixelRect.isEmpty else { return nil }
         
         // Add padding around the face for better recognition
         let padding: CGFloat = 0.1
-        let paddedRect = CGRect(
-            x: max(0, pixelRect.origin.x - pixelRect.size.width * padding),
-            y: max(0, pixelRect.origin.y - pixelRect.size.height * padding),
-            width: min(imageWidth - pixelRect.origin.x, pixelRect.size.width * (1 + 2 * padding)),
-            height: min(imageHeight - pixelRect.origin.y, pixelRect.size.height * (1 + 2 * padding))
-        )
-        
-        guard let croppedImage = fullImage.cropping(to: paddedRect) else {
+        var paddedRect = pixelRect.insetBy(dx: -pixelRect.width * padding, dy: -pixelRect.height * padding)
+        let bounds = CGRect(x: 0, y: 0, width: imageWidth, height: imageHeight)
+        paddedRect = paddedRect.intersection(bounds)
+        guard !paddedRect.isEmpty,
+              let croppedImage = fullImage.cropping(to: paddedRect.integral) else {
             return nil
         }
-        
+
         return croppedImage
+    }
+
+    private func convertNormalizedBoundingBoxToPixelRect(_ boundingBox: CGRect, imageWidth: CGFloat, imageHeight: CGFloat) -> CGRect {
+        let width = boundingBox.width * imageWidth
+        let height = boundingBox.height * imageHeight
+        let x = boundingBox.minX * imageWidth
+        let y = (1 - boundingBox.minY - boundingBox.height) * imageHeight
+        let rect = CGRect(x: x, y: y, width: width, height: height)
+        let bounds = CGRect(x: 0, y: 0, width: imageWidth, height: imageHeight)
+        return rect.intersection(bounds)
     }
     
     private func getImageData(for asset: PHAsset) async throws -> Data? {
