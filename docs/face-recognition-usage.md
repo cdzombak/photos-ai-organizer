@@ -106,13 +106,6 @@ The face recognition system creates three new tables:
 - `face_embedding`: `vector(512)` embedding values stored via pgvector
 - `created_at`: Timestamp
 
-### `face_clusters`
-- `id`: UUID primary key
-- `person_id`: Reference to person
-- `face_detection_ids`: Array of face detection IDs
-- `similarity_threshold`: Clustering threshold used
-- `created_at`: Timestamp
-
 ## Configuration
 
 Add these optional settings to your `photos-config.yml`:

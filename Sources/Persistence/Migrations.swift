@@ -40,15 +40,6 @@ public extension MigrationStep {
             );
             """,
             """
-            CREATE TABLE IF NOT EXISTS face_clusters (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                representative_face_id UUID REFERENCES face_detections(id),
-                cluster_quality FLOAT,
-                needs_review BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            );
-            """,
-            """
             CREATE INDEX IF NOT EXISTS idx_face_detections_asset_id ON face_detections(asset_id);
             """,
             """
