@@ -64,6 +64,7 @@ Then open `http://localhost:8081` (or your chosen port). The single-page UI lets
 
 - Browse all detected persons, including a sample face thumbnail and counts
 - Inspect every face thumbnail within a person without leaving the browser
+- Use the sort dropdown to order persons by recency, face count, or quality score
 
 Use the optional `--port` flag to host on a different port if 8081 is busy.
 
@@ -117,9 +118,15 @@ face_recognition:
   min_cluster_size: 3
   max_cluster_size: 50
 
+# Face detection filtering
+face_detection:
+  min_confidence: 0.85
+
 # Database table overrides (optional)
 table_name: "photo_metadata"
 ```
+
+`face_detection.min_confidence` lets you discard low-confidence Vision detections so only high-quality faces are saved and clustered. Set it between 0 and 1 (default 0.85).
 
 ## Troubleshooting
 

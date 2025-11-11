@@ -201,16 +201,22 @@ private final class FaceDataProvider: @unchecked Sendable {
         try withConnection { connection in
             let sql = """
             SELECT p.id, p.name, p.created_at, p.updated_at,
-                   COALESCE(fc.face_count, 0) AS face_count,
-                   fc.sample_face_id
+                   COALESCE(cnt.face_count, 0) AS face_count,
+                   sample.sample_face_id,
+                   p.cluster_quality
             FROM persons p
             LEFT JOIN LATERAL (
-                SELECT fd.id AS sample_face_id, COUNT(fd.id) OVER () AS face_count
+                SELECT COUNT(*) AS face_count
+                FROM face_detections fd
+                WHERE fd.person_id = p.id
+            ) cnt ON true
+            LEFT JOIN LATERAL (
+                SELECT fd.id AS sample_face_id
                 FROM face_detections fd
                 WHERE fd.person_id = p.id
                 ORDER BY fd.created_at ASC
                 LIMIT 1
-            ) fc ON true
+            ) sample ON true
             WHERE p.is_active = true
             ORDER BY p.created_at ASC;
             """
@@ -229,6 +235,7 @@ private final class FaceDataProvider: @unchecked Sendable {
                 }
                 let name = try resolved.columns[1].optionalString()
                 let sampleFaceID = try resolved.columns[5].optionalString().flatMap(UUID.init)
+                let quality = try resolved.columns[6].optionalDouble().map(Float.init)
                 summaries.append(FacePersonSummary(
                     id: id,
                     name: name,
@@ -236,7 +243,8 @@ private final class FaceDataProvider: @unchecked Sendable {
                     createdAt: createdAt,
                     updatedAt: updatedAt,
                     sampleFaceID: sampleFaceID,
-                    sampleImageURL: sampleFaceID.map { "/api/faces/\($0.uuidString)/thumbnail?size=160" }
+                    sampleImageURL: sampleFaceID.map { "/api/faces/\($0.uuidString)/thumbnail?size=160" },
+                    qualityScore: quality
                 ))
             }
             return summaries
@@ -373,6 +381,7 @@ private struct FacePersonSummary: Codable {
     let updatedAt: Date
     let sampleFaceID: UUID?
     let sampleImageURL: String?
+    let qualityScore: Float?
 }
 
 private struct FacePreview: Codable {
@@ -424,6 +433,14 @@ private enum FaceWebAssets {
             <h1>Face Browser</h1>
             <p class=\"subtitle\">Review detected persons</p>
           </div>
+          <div class=\"sort-controls\">
+            <label for=\"sort-mode\">Sort by</label>
+            <select id=\"sort-mode\">
+              <option value=\"created\" selected>Recently added</option>
+              <option value=\"faces\">Most faces</option>
+              <option value=\"quality\">Highest quality</option>
+            </select>
+          </div>
         </header>
         <main>
           <section id=\"persons-view\" class=\"view active\">
@@ -474,6 +491,7 @@ private enum FaceWebAssets {
       flex-wrap: wrap;
       gap: 16px;
       align-items: flex-end;
+      justify-content: space-between;
       margin-bottom: 24px;
     }
     header .title h1 {
@@ -525,6 +543,19 @@ private enum FaceWebAssets {
       border-radius: 10px;
       font-weight: 600;
       cursor: pointer;
+    }
+    .sort-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+    }
+    .sort-controls select {
+      border: 1px solid var(--border);
+      background: var(--card-bg);
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-weight: 600;
     }
     .view { display: block; }
     .empty {
@@ -595,12 +626,22 @@ private enum FaceWebAssets {
     const state = {
       persons: [],
       facesCache: new Map(),
+      sortMode: 'created',
     };
 
     document.addEventListener('DOMContentLoaded', () => {
+      setupSortControls();
       setupDrawer();
       refreshData();
     });
+
+    function setupSortControls() {
+      const select = document.getElementById('sort-mode');
+      select.addEventListener('change', () => {
+        state.sortMode = select.value;
+        renderPersons();
+      });
+    }
 
     function setupDrawer() {
       document.getElementById('drawer-close').addEventListener('click', closeDrawer);
@@ -633,7 +674,8 @@ private enum FaceWebAssets {
         return;
       }
       document.getElementById('persons-empty').style.display = 'none';
-      state.persons.forEach((person) => {
+      const sorted = sortPersons([...state.persons]);
+      sorted.forEach((person) => {
         grid.appendChild(createCard({
           title: person.name || 'Unnamed person',
           subtitle: `${person.faceCount} face${person.faceCount === 1 ? '' : 's'}`,
@@ -642,6 +684,25 @@ private enum FaceWebAssets {
           onClick: () => openDrawer(person.id, person.name || 'Person', person.faceCount)
         }));
       });
+    }
+
+    function sortPersons(persons) {
+      switch (state.sortMode) {
+        case 'faces':
+          return persons.sort((a, b) => (b.faceCount ?? 0) - (a.faceCount ?? 0));
+        case 'quality':
+          return persons.sort((a, b) => (qualityScore(b) - qualityScore(a)) || ((b.faceCount ?? 0) - (a.faceCount ?? 0)));
+        case 'created':
+        default:
+          return persons.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      }
+    }
+
+    function qualityScore(person) {
+      if (person.qualityScore === null || person.qualityScore === undefined) {
+        return -1;
+      }
+      return person.qualityScore;
     }
 
     function createCard({ title, subtitle, image, actionLabel, onClick }) {

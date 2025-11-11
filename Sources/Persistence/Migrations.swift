@@ -60,6 +60,16 @@ public extension MigrationStep {
             """
         ]
     )
+
+    static let addPersonQualityColumn = MigrationStep(
+        identifier: "002_add_person_quality",
+        statements: [
+            """
+            ALTER TABLE persons
+            ADD COLUMN IF NOT EXISTS cluster_quality FLOAT;
+            """
+        ]
+    )
 }
 
 protocol SQLCommandExecutor {

@@ -11,13 +11,14 @@ public final class FaceStore {
     
     public func savePerson(_ person: Person, connection: Connection) throws {
         let sql = """
-        INSERT INTO persons (id, name, created_at, updated_at, merged_into, is_active)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO persons (id, name, created_at, updated_at, merged_into, is_active, cluster_quality)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             updated_at = EXCLUDED.updated_at,
             merged_into = EXCLUDED.merged_into,
-            is_active = EXCLUDED.is_active;
+            is_active = EXCLUDED.is_active,
+            cluster_quality = EXCLUDED.cluster_quality;
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
@@ -28,7 +29,8 @@ public final class FaceStore {
             PostgresTimestampWithTimeZone(date: person.createdAt),
             PostgresTimestampWithTimeZone(date: person.updatedAt),
             person.mergedInto?.uuidString,
-            person.isActive
+            person.isActive,
+            person.clusterQuality.map { Double($0) }
         ]
         _ = try statement.execute(parameterValues: params)
     }
@@ -215,6 +217,30 @@ public final class FaceStore {
         
         return detections
     }
+
+    public func getFaceEmbeddings(for personID: UUID, limit: Int, connection: Connection) throws -> [[Float]] {
+        let sql = """
+        SELECT face_embedding::text
+        FROM face_detections
+        WHERE person_id = $1 AND face_embedding IS NOT NULL
+        ORDER BY created_at ASC
+        LIMIT $2;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        let cursor = try statement.execute(parameterValues: [personID.uuidString, limit])
+        var embeddings: [[Float]] = []
+        for row in cursor {
+            let resolved = try row.get()
+            guard let embeddingText = try resolved.columns[0].optionalString(),
+                  let data = embeddingText.data(using: .utf8),
+                  let array = try JSONSerialization.jsonObject(with: data) as? [Double] else {
+                continue
+            }
+            embeddings.append(array.map { Float($0) })
+        }
+        return embeddings
+    }
     
     public func createPerson(connection: Connection) throws -> Person {
         let person = Person()
@@ -240,7 +266,7 @@ public final class FaceStore {
     
     public func getPerson(_ personID: UUID, connection: Connection) throws -> Person? {
         let sql = """
-        SELECT id, name, created_at, updated_at, merged_into, is_active
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality
         FROM persons
         WHERE id = $1;
         """
@@ -262,6 +288,7 @@ public final class FaceStore {
             let name = try resolved.columns[1].optionalString()
             let mergedIntoString = try resolved.columns[4].optionalString()
             let mergedInto = mergedIntoString != nil ? UUID(uuidString: mergedIntoString!) : nil
+            let quality = try resolved.columns[6].optionalDouble().map(Float.init)
             
             return Person(
                 id: id,
@@ -269,16 +296,17 @@ public final class FaceStore {
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 mergedInto: mergedInto,
-                isActive: isActive
+                isActive: isActive,
+                clusterQuality: quality
             )
         }
-        
+
         return nil
     }
     
     public func getAllActivePersons(connection: Connection) throws -> [Person] {
         let sql = """
-        SELECT id, name, created_at, updated_at, merged_into, is_active
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality
         FROM persons
         WHERE is_active = true
         ORDER BY created_at ASC;
@@ -303,6 +331,7 @@ public final class FaceStore {
             let name = try resolved.columns[1].optionalString()
             let mergedIntoString = try resolved.columns[4].optionalString()
             let mergedInto = mergedIntoString != nil ? UUID(uuidString: mergedIntoString!) : nil
+            let quality = try resolved.columns[6].optionalDouble().map(Float.init)
             
             persons.append(Person(
                 id: id,
@@ -310,10 +339,11 @@ public final class FaceStore {
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 mergedInto: mergedInto,
-                isActive: isActive
+                isActive: isActive,
+                clusterQuality: quality
             ))
         }
-        
+
         return persons
     }
     
@@ -534,6 +564,17 @@ public final class FaceStore {
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
         _ = try statement.execute(parameterValues: [assetID])
+    }
+
+    public func updatePersonQuality(_ personID: UUID, quality: Float?, connection: Connection) throws {
+        let sql = """
+        UPDATE persons
+        SET cluster_quality = $1, updated_at = NOW()
+        WHERE id = $2;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute(parameterValues: [quality.map { Double($0) }, personID.uuidString])
     }
 }
 

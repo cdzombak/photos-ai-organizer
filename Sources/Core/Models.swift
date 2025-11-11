@@ -281,6 +281,7 @@ public struct Person {
     public var updatedAt: Date
     public var mergedInto: UUID?
     public var isActive: Bool
+    public var clusterQuality: Float?
 
     public init(
         id: UUID = UUID(),
@@ -288,7 +289,8 @@ public struct Person {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         mergedInto: UUID? = nil,
-        isActive: Bool = true
+        isActive: Bool = true,
+        clusterQuality: Float? = nil
     ) {
         self.id = id
         self.name = name
@@ -296,6 +298,7 @@ public struct Person {
         self.updatedAt = updatedAt
         self.mergedInto = mergedInto
         self.isActive = isActive
+        self.clusterQuality = clusterQuality
     }
 
     public func withName(_ name: String?) -> Person {
@@ -305,7 +308,8 @@ public struct Person {
             createdAt: createdAt,
             updatedAt: Date(),
             mergedInto: mergedInto,
-            isActive: isActive
+            isActive: isActive,
+            clusterQuality: clusterQuality
         )
     }
 
@@ -316,7 +320,8 @@ public struct Person {
             createdAt: createdAt,
             updatedAt: Date(),
             mergedInto: mergedInto,
-            isActive: isActive
+            isActive: isActive,
+            clusterQuality: clusterQuality
         )
     }
 
@@ -327,7 +332,8 @@ public struct Person {
             createdAt: createdAt,
             updatedAt: Date(),
             mergedInto: mergedInto,
-            isActive: isActive
+            isActive: isActive,
+            clusterQuality: clusterQuality
         )
     }
 }

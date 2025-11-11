@@ -37,6 +37,7 @@ struct FacePipelineCommand: AsyncParsableCommand {
         
         // Load configuration
         let config = try PostgresConfig.fromConfigFile(path: configPath)
+        let faceDetectionMinConfidence = config.faceDetectionMinConfidence ?? FaceDetectionService.defaultConfidenceThreshold
         let connectionConfig = try config.makeConnectionConfiguration()
         
         // Establish database connection
@@ -46,7 +47,7 @@ struct FacePipelineCommand: AsyncParsableCommand {
         // Run database migrations
         print("📊 Running database migrations...")
         let migrationRunner = MigrationRunner(connection: connection)
-        try migrationRunner.run([.createFaceTables])
+        try migrationRunner.run([.createFaceTables, .addPersonQualityColumn])
         
         // Initialize services
         let faceStore = FaceStore(config: config)
@@ -74,7 +75,8 @@ struct FacePipelineCommand: AsyncParsableCommand {
             faceStore: faceStore,
             faceRecognitionService: faceRecognitionService,
             photoLibraryAdapter: photoLibraryAdapter,
-            connection: connection
+            connection: connection,
+            faceDetectionMinConfidence: faceDetectionMinConfidence
         )
         
         print("\n📊 Processing Summary:")
@@ -123,7 +125,8 @@ struct FacePipelineCommand: AsyncParsableCommand {
         faceStore: FaceStore,
         faceRecognitionService: FaceRecognitionService,
         photoLibraryAdapter: PhotoLibraryAdapter,
-        connection: Connection
+        connection: Connection,
+        faceDetectionMinConfidence: Float
     ) async throws -> ProcessingStats {
         var stats = ProcessingStats()
         guard !photos.isEmpty else { return stats }
@@ -167,7 +170,8 @@ struct FacePipelineCommand: AsyncParsableCommand {
             assetIdentifiers: identifiers,
             concurrencyLimit: concurrencyLimit,
             photoLibraryAdapter: photoLibraryAdapter,
-            faceRecognitionService: faceRecognitionService
+            faceRecognitionService: faceRecognitionService,
+            faceDetectionMinConfidence: faceDetectionMinConfidence
         )
         
         var processedCount = 0
@@ -215,6 +219,7 @@ struct FacePipelineCommand: AsyncParsableCommand {
                 reporter.advance(to: index + 1)
                 let quality = try await clusteringService.computeClusterQuality(for: person.id, connection: connection)
                 qualityScores.append(quality)
+                try faceStore.updatePersonQuality(person.id, quality: quality, connection: connection)
                 
                 if quality < 0.5 {
                     lowQualityClusters += 1
@@ -262,7 +267,8 @@ private extension FacePipelineCommand {
         assetIdentifiers: [String],
         concurrencyLimit: Int,
         photoLibraryAdapter: PhotoLibraryAdapter,
-        faceRecognitionService: FaceRecognitionService
+        faceRecognitionService: FaceRecognitionService,
+        faceDetectionMinConfidence: Float
     ) async -> [PhotoProcessingResult] {
         guard !assetIdentifiers.isEmpty else { return [] }
         return await withTaskGroup(of: PhotoProcessingResult.self) { group in
@@ -274,7 +280,8 @@ private extension FacePipelineCommand {
                         await processPhoto(
                             assetIdentifier: next,
                             photoLibraryAdapter: photoLibraryAdapter,
-                            faceRecognitionService: faceRecognitionService
+                            faceRecognitionService: faceRecognitionService,
+                            faceDetectionMinConfidence: faceDetectionMinConfidence
                         )
                     }
                 }
@@ -287,7 +294,8 @@ private extension FacePipelineCommand {
                         await processPhoto(
                             assetIdentifier: next,
                             photoLibraryAdapter: photoLibraryAdapter,
-                            faceRecognitionService: faceRecognitionService
+                            faceRecognitionService: faceRecognitionService,
+                            faceDetectionMinConfidence: faceDetectionMinConfidence
                         )
                     }
                 }
@@ -299,7 +307,8 @@ private extension FacePipelineCommand {
     static func processPhoto(
         assetIdentifier: String,
         photoLibraryAdapter: PhotoLibraryAdapter,
-        faceRecognitionService: FaceRecognitionService
+        faceRecognitionService: FaceRecognitionService,
+        faceDetectionMinConfidence: Float
     ) async -> PhotoProcessingResult {
         guard let asset = photoLibraryAdapter.fetchAssets(with: [assetIdentifier]).first else {
             return PhotoProcessingResult(
@@ -311,7 +320,10 @@ private extension FacePipelineCommand {
                 errorDescription: ExportError.invalidArgument("Asset \(assetIdentifier) not found").localizedDescription
             )
         }
-        let detectionService = FaceDetectionService(photoLibraryAdapter: photoLibraryAdapter)
+        let detectionService = FaceDetectionService(
+            photoLibraryAdapter: photoLibraryAdapter,
+            minimumConfidence: faceDetectionMinConfidence
+        )
         do {
             let faceDetections = try await detectionService.detectFaces(in: asset)
             if faceDetections.isEmpty {
