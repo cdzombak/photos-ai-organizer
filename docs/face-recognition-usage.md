@@ -63,8 +63,7 @@ photos-ai-organizer serve-faces --config photos-config.yml --port 8081
 Then open `http://localhost:8081` (or your chosen port). The single-page UI lets you:
 
 - Browse all detected persons, including a sample face thumbnail and counts
-- View automatically grouped clusters (including unassigned faces) and drill into each cluster
-- Inspect every face thumbnail within a person or cluster without leaving the browser
+- Inspect every face thumbnail within a person without leaving the browser
 
 Use the optional `--port` flag to host on a different port if 8081 is busy.
 

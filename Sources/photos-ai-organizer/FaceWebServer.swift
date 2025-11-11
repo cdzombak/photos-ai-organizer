@@ -102,16 +102,6 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
                       let personID = UUID(uuidString: String(pathComponents[2])) {
                 let faces = try dataProvider.fetchFaces(forPerson: personID)
                 return respondJSON(faces, context: context)
-            } else if path == "/api/clusters" {
-                let clusters = try dataProvider.fetchClusterSummaries()
-                return respondJSON(clusters, context: context)
-            } else if pathComponents.count == 4,
-                      pathComponents[0] == "api",
-                      pathComponents[1] == "clusters",
-                      pathComponents[3] == "faces" {
-                let clusterID = String(pathComponents[2])
-                let faces = try dataProvider.fetchFacesForCluster(clusterID: clusterID)
-                return respondJSON(faces, context: context)
             } else if pathComponents.count == 4,
                       pathComponents[0] == "api",
                       pathComponents[1] == "faces",
@@ -260,70 +250,6 @@ private final class FaceDataProvider: @unchecked Sendable {
         }
     }
 
-    func fetchClusterSummaries() throws -> [FaceClusterSummary] {
-        try withConnection { connection in
-            let persons = try faceStore.getAllActivePersons(connection: connection)
-            var nameLookup: [UUID: String] = [:]
-            persons.forEach { nameLookup[$0.id] = $0.name ?? "Person \($0.id.uuidString.prefix(6))" }
-
-            let sql = """
-            SELECT person_id, face_count, sample_face_id
-            FROM (
-                SELECT person_id,
-                       COUNT(*) OVER (PARTITION BY person_id) AS face_count,
-                       FIRST_VALUE(id) OVER (PARTITION BY person_id ORDER BY created_at ASC) AS sample_face_id,
-                       ROW_NUMBER() OVER (PARTITION BY person_id ORDER BY created_at ASC) AS row_number
-                FROM face_detections
-            ) ranked
-            WHERE row_number = 1
-            ORDER BY face_count DESC;
-            """
-            let statement = try connection.prepareStatement(text: sql)
-            defer { statement.close() }
-            let cursor = try statement.execute()
-            var summaries: [FaceClusterSummary] = []
-            for row in cursor {
-                let resolved = try row.get()
-                let personID = try resolved.columns[0].optionalString().flatMap(UUID.init)
-                guard let faceCount = try resolved.columns[1].optionalInt() else { continue }
-                let sampleFaceID = try resolved.columns[2].optionalString().flatMap(UUID.init)
-                let idString = personID?.uuidString ?? "unassigned"
-                let label: String
-                if let personID, let name = nameLookup[personID], !name.isEmpty {
-                    label = name
-                } else if personID != nil {
-                    label = "Person \(personID!.uuidString.prefix(6))"
-                } else {
-                    label = "Unassigned faces"
-                }
-                summaries.append(FaceClusterSummary(
-                    id: idString,
-                    label: label,
-                    personID: personID,
-                    faceCount: faceCount,
-                    sampleFaceID: sampleFaceID,
-                    sampleImageURL: sampleFaceID.map { "/api/faces/\($0.uuidString)/thumbnail?size=160" }
-                ))
-            }
-            return summaries
-        }
-    }
-
-    func fetchFacesForCluster(clusterID: String) throws -> [FacePreview] {
-        let identifier = clusterID.lowercased()
-        return try withConnection { connection in
-            let faces: [FaceDetection]
-            if identifier == "unassigned" {
-                faces = try faceStore.getFacesWithoutPerson(connection: connection)
-            } else if let uuid = UUID(uuidString: clusterID) {
-                faces = try faceStore.getFacesForPerson(uuid, connection: connection)
-            } else {
-                faces = []
-            }
-            return faces.map { FacePreview(face: $0) }
-        }
-    }
-
     func fetchFaceDetection(by id: UUID) throws -> FaceDetection? {
         try withConnection { connection in
             try faceStore.getFaceDetection(id, connection: connection)
@@ -449,15 +375,6 @@ private struct FacePersonSummary: Codable {
     let sampleImageURL: String?
 }
 
-private struct FaceClusterSummary: Codable {
-    let id: String
-    let label: String
-    let personID: UUID?
-    let faceCount: Int
-    let sampleFaceID: UUID?
-    let sampleImageURL: String?
-}
-
 private struct FacePreview: Codable {
     struct BoundingBox: Codable {
         let x: Double
@@ -505,21 +422,13 @@ private enum FaceWebAssets {
         <header>
           <div class=\"title\">
             <h1>Face Browser</h1>
-            <p class=\"subtitle\">Review detected persons and clusters</p>
+            <p class=\"subtitle\">Review detected persons</p>
           </div>
-          <nav>
-            <button class=\"tab active\" data-tab=\"persons\">Persons</button>
-            <button class=\"tab\" data-tab=\"clusters\">Clusters</button>
-          </nav>
         </header>
         <main>
           <section id=\"persons-view\" class=\"view active\">
             <div class=\"grid\" id=\"persons-grid\"></div>
             <div class=\"empty\" id=\"persons-empty\">No persons available.</div>
-          </section>
-          <section id=\"clusters-view\" class=\"view\">
-            <div class=\"grid\" id=\"clusters-grid\"></div>
-            <div class=\"empty\" id=\"clusters-empty\">No clusters yet.</div>
           </section>
         </main>
         <div id=\"drawer\" class=\"drawer hidden\">
@@ -576,25 +485,6 @@ private enum FaceWebAssets {
       color: rgba(0,0,0,0.6);
       font-size: 0.95rem;
     }
-    nav {
-      margin-left: auto;
-      display: flex;
-      gap: 8px;
-    }
-    nav .tab {
-      border: 1px solid var(--border);
-      background: var(--card-bg);
-      padding: 8px 16px;
-      border-radius: 999px;
-      cursor: pointer;
-      font-weight: 600;
-      transition: background 0.2s ease;
-    }
-    nav .tab.active {
-      background: #0057ff;
-      color: white;
-      border-color: #0057ff;
-    }
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -636,8 +526,7 @@ private enum FaceWebAssets {
       font-weight: 600;
       cursor: pointer;
     }
-    .view { display: none; }
-    .view.active { display: block; }
+    .view { display: block; }
     .empty {
       text-align: center;
       padding: 40px 0;
@@ -696,9 +585,6 @@ private enum FaceWebAssets {
         flex-direction: column;
         align-items: flex-start;
       }
-      nav {
-        margin-left: 0;
-      }
       .drawer {
         width: 100%;
       }
@@ -708,29 +594,13 @@ private enum FaceWebAssets {
     static let appJS = """
     const state = {
       persons: [],
-      clusters: [],
-      activeTab: 'persons',
       facesCache: new Map(),
     };
 
     document.addEventListener('DOMContentLoaded', () => {
-      setupTabs();
       setupDrawer();
       refreshData();
     });
-
-    function setupTabs() {
-      document.querySelectorAll('nav .tab').forEach((button) => {
-        button.addEventListener('click', () => {
-          if (button.classList.contains('active')) return;
-          document.querySelectorAll('nav .tab').forEach((btn) => btn.classList.remove('active'));
-          button.classList.add('active');
-          state.activeTab = button.dataset.tab;
-          document.querySelectorAll('.view').forEach((view) => view.classList.remove('active'));
-          document.getElementById(`${state.activeTab}-view`).classList.add('active');
-        });
-      });
-    }
 
     function setupDrawer() {
       document.getElementById('drawer-close').addEventListener('click', closeDrawer);
@@ -741,7 +611,7 @@ private enum FaceWebAssets {
     }
 
     async function refreshData() {
-      await Promise.all([loadPersons(), loadClusters()]);
+      await loadPersons();
     }
 
     async function loadPersons() {
@@ -750,17 +620,6 @@ private enum FaceWebAssets {
         if (!response.ok) throw new Error('Failed to load persons');
         state.persons = await response.json();
         renderPersons();
-      } catch (error) {
-        console.error(error);
-      }
-    }
-
-    async function loadClusters() {
-      try {
-        const response = await fetch('/api/clusters');
-        if (!response.ok) throw new Error('Failed to load clusters');
-        state.clusters = await response.json();
-        renderClusters();
       } catch (error) {
         console.error(error);
       }
@@ -780,26 +639,7 @@ private enum FaceWebAssets {
           subtitle: `${person.faceCount} face${person.faceCount === 1 ? '' : 's'}`,
           image: person.sampleImageURL,
           actionLabel: 'View faces',
-          onClick: () => openDrawer('persons', person.id, person.name || 'Person', person.faceCount)
-        }));
-      });
-    }
-
-    function renderClusters() {
-      const grid = document.getElementById('clusters-grid');
-      grid.innerHTML = '';
-      if (state.clusters.length === 0) {
-        document.getElementById('clusters-empty').style.display = 'block';
-        return;
-      }
-      document.getElementById('clusters-empty').style.display = 'none';
-      state.clusters.forEach((cluster) => {
-        grid.appendChild(createCard({
-          title: cluster.label,
-          subtitle: `${cluster.faceCount} face${cluster.faceCount === 1 ? '' : 's'}`,
-          image: cluster.sampleImageURL,
-          actionLabel: 'View faces',
-          onClick: () => openDrawer('clusters', cluster.id, cluster.label, cluster.faceCount)
+          onClick: () => openDrawer(person.id, person.name || 'Person', person.faceCount)
         }));
       });
     }
@@ -827,7 +667,7 @@ private enum FaceWebAssets {
       return card;
     }
 
-    async function openDrawer(type, id, label, faceCount) {
+    async function openDrawer(id, label, faceCount) {
       const drawer = document.getElementById('drawer');
       drawer.classList.remove('hidden');
       document.getElementById('drawer-title').textContent = label;
@@ -837,14 +677,14 @@ private enum FaceWebAssets {
       content.innerHTML = '';
       empty.style.display = 'none';
 
-      const cacheKey = `${type}:${id}`;
+      const cacheKey = `person:${id}`;
       if (state.facesCache.has(cacheKey)) {
         renderFaces(state.facesCache.get(cacheKey));
         return;
       }
 
       try {
-        const response = await fetch(`/api/${type}/${id}/faces`);
+        const response = await fetch(`/api/persons/${id}/faces`);
         if (!response.ok) throw new Error('Failed to load faces');
         const faces = await response.json();
         state.facesCache.set(cacheKey, faces);
