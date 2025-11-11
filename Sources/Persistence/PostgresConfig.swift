@@ -19,6 +19,7 @@ public struct PostgresConfig {
     public let thematicFolderName: String?
     public let gradingAI: AIConfig?
     public let thematicAI: AIConfig?
+    public let faceDetectionMinConfidence: Float?
 
     public enum AuthMethod: Decodable {
         case auto
@@ -92,7 +93,8 @@ public struct PostgresConfig {
             thematicAlbums: rawConfig.thematicAlbums,
             thematicFolderName: rawConfig.thematicFolder ?? "Thematic Albums",
             gradingAI: rawConfig.ai?.grade,
-            thematicAI: rawConfig.ai?.thematic ?? rawConfig.ai?.grade
+            thematicAI: rawConfig.ai?.thematic ?? rawConfig.ai?.grade,
+            faceDetectionMinConfidence: rawConfig.faceDetection?.minConfidence
         )
     }
 
@@ -163,6 +165,7 @@ public struct PostgresConfig {
         public let thematicAlbums: [ThematicAlbum]?
         public let thematicFolder: String?
         public let ai: AISection?
+        public let faceDetection: FaceDetectionConfig?
 
         enum CodingKeys: String, CodingKey {
             case postgres
@@ -171,6 +174,7 @@ public struct PostgresConfig {
             case thematicAlbums = "thematic_albums"
             case thematicFolder = "thematic_folder"
             case ai
+            case faceDetection = "face_detection"
         }
     }
 }
@@ -213,4 +217,12 @@ public struct AIConfig: Decodable, Sendable {
 public struct AISection: Decodable {
     public let grade: AIConfig
     public let thematic: AIConfig?
+}
+
+public struct FaceDetectionConfig: Decodable {
+    public let minConfidence: Float?
+
+    enum CodingKeys: String, CodingKey {
+        case minConfidence = "min_confidence"
+    }
 }

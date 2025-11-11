@@ -7,10 +7,17 @@ import UniformTypeIdentifiers
 @preconcurrency import Photos
 
 public struct FaceDetectionService {
+    public static let defaultConfidenceThreshold: Float = 0.85
+
     private let photoLibraryAdapter: PhotoLibraryAdapter
+    private let confidenceThreshold: Float
     
-    public init(photoLibraryAdapter: PhotoLibraryAdapter = PhotoLibraryAdapter()) {
+    public init(
+        photoLibraryAdapter: PhotoLibraryAdapter = PhotoLibraryAdapter(),
+        minimumConfidence: Float = FaceDetectionService.defaultConfidenceThreshold
+    ) {
         self.photoLibraryAdapter = photoLibraryAdapter
+        self.confidenceThreshold = min(max(minimumConfidence, 0), 1)
     }
     
     public func detectFaces(in asset: PHAsset) async throws -> [FaceDetection] {
@@ -94,7 +101,9 @@ public struct FaceDetectionService {
                     return
                 }
                 
-                let detections = observations.map { observation in
+                let detections = observations
+                    .filter { Float($0.confidence) >= self.confidenceThreshold }
+                    .map { observation in
                     FaceDetection(
                         assetID: assetID,
                         boundingBox: observation.boundingBox,
@@ -103,51 +112,6 @@ public struct FaceDetectionService {
                 }
                 
                 continuation.resume(returning: detections)
-            }
-            
-            let handler = VNImageRequestHandler(ciImage: image, options: [:])
-            
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    try handler.perform([request])
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
-    }
-    
-    public func detectFacesWithLandmarks(in asset: PHAsset) async throws -> [(FaceDetection, VNFaceObservation)] {
-        guard let imageData = try await getImageData(for: asset) else {
-            return []
-        }
-        
-        guard let image = CIImage(data: imageData) else {
-            return []
-        }
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            let request = VNDetectFaceLandmarksRequest { request, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                    return
-                }
-                
-                guard let observations = request.results as? [VNFaceObservation] else {
-                    continuation.resume(returning: [])
-                    return
-                }
-                
-                let results = observations.map { observation in
-                    let detection = FaceDetection(
-                        assetID: asset.localIdentifier,
-                        boundingBox: observation.boundingBox,
-                        confidence: Float(observation.confidence)
-                    )
-                    return (detection, observation)
-                }
-                
-                continuation.resume(returning: results)
             }
             
             let handler = VNImageRequestHandler(ciImage: image, options: [:])
