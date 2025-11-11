@@ -27,9 +27,11 @@ struct FacePipelineCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Force reprocessing of already processed photos")
     var forceReprocess: Bool = false
     
+    @Option(name: .long, help: "Maximum number of photos to process concurrently")
+    var concurrency: Int = max(1, ProcessInfo.processInfo.activeProcessorCount)
+    
     func run() async throws {
         let photoLibraryAdapter = PhotoLibraryAdapter()
-        let faceDetectionService = FaceDetectionService()
         let faceRecognitionService = FaceRecognitionService()
         print("🔍 Starting face processing pipeline...")
         
@@ -70,8 +72,8 @@ struct FacePipelineCommand: AsyncParsableCommand {
         let processingStats = try await processFaces(
             in: photos,
             faceStore: faceStore,
-            faceDetectionService: faceDetectionService,
             faceRecognitionService: faceRecognitionService,
+            photoLibraryAdapter: photoLibraryAdapter,
             connection: connection
         )
         
@@ -119,90 +121,81 @@ struct FacePipelineCommand: AsyncParsableCommand {
     private func processFaces(
         in photos: [PHAsset],
         faceStore: FaceStore,
-        faceDetectionService: FaceDetectionService,
         faceRecognitionService: FaceRecognitionService,
+        photoLibraryAdapter: PhotoLibraryAdapter,
         connection: Connection
     ) async throws -> ProcessingStats {
         var stats = ProcessingStats()
+        guard !photos.isEmpty else { return stats }
         
-        let total = photos.count
-        let progressReporter = ProgressReporter(total: total, label: "Processing photos", interval: max(1, total / 1000))
+        let scanReporter = ProgressReporter(total: photos.count, label: "Scanning photos", interval: max(1, photos.count / 1000))
+        var assetsToProcess: [PHAsset] = []
         
         for (index, photo) in photos.enumerated() {
-            progressReporter.advance(to: index + 1)
-            
+            scanReporter.advance(to: index + 1)
             do {
                 if forceReprocess {
                     try faceStore.deleteProcessingStatus(for: photo.localIdentifier, connection: connection)
-                }
-                
-                // Check if already processed (unless forcing reprocess)
-                if !forceReprocess {
+                } else {
                     let existingDetections = try faceStore.getFaceDetectionsForAsset(photo.localIdentifier, connection: connection)
                     if !existingDetections.isEmpty {
-                    stats.photosProcessed += 1
-                    continue
-                }
-                if try faceStore.getProcessingStatus(for: photo.localIdentifier, connection: connection) != nil {
-                    stats.photosProcessed += 1
-                    continue
-                }
-                }
-                
-                // Detect faces
-                let faceDetections = try await faceDetectionService.detectFaces(in: photo)
-                stats.facesDetected += faceDetections.count
-                
-                if faceDetections.isEmpty {
-                    print("   👤 No faces detected")
-                    try faceStore.upsertProcessingStatus(assetID: photo.localIdentifier, facesDetected: 0, connection: connection)
-                    stats.photosProcessed += 1
-                    continue
-                }
-                
-                print("   👤 Detected \(faceDetections.count) face(s)")
-                
-                // Generate embeddings for each face
-                var processedDetections: [FaceDetection] = []
-                
-                for (faceIndex, faceDetection) in faceDetections.enumerated() {
-                    do {
-                        // Extract face image
-                        guard let faceImage = try await faceDetectionService.extractFaceImage(
-                            from: photo,
-                            boundingBox: faceDetection.boundingBox
-                        ) else {
-                            print("     ⚠️  Could not extract face image \(faceIndex + 1)")
-                            continue
-                        }
-                        
-                        // Generate embedding
-                        let embedding = try await faceRecognitionService.generateEmbedding(for: faceImage)
-                        let detectionWithEmbedding = faceDetection.withFaceEmbedding(embedding)
-                        
-                        processedDetections.append(detectionWithEmbedding)
-                        stats.embeddingsGenerated += 1
-                        
-                    } catch {
-                        print("     ⚠️  Failed to generate embedding for face \(faceIndex + 1): \(error)")
-                        stats.errors += 1
+                        stats.photosProcessed += 1
+                        continue
+                    }
+                    if try faceStore.getProcessingStatus(for: photo.localIdentifier, connection: connection) != nil {
+                        stats.photosProcessed += 1
+                        continue
                     }
                 }
-                
-                // Save all face detections for this photo
-                for detection in processedDetections {
-                    try faceStore.saveFaceDetection(detection, connection: connection)
-                }
-                try faceStore.upsertProcessingStatus(assetID: photo.localIdentifier, facesDetected: processedDetections.count, connection: connection)
-                
-                stats.photosProcessed += 1
-                print("   ✅ Processed \(processedDetections.count) face(s) with embeddings")
-                
+                assetsToProcess.append(photo)
             } catch {
-                print("   ❌ Error processing photo: \(error)")
+                print("   ❌ Error preparing photo \(photo.localIdentifier): \(error)")
                 stats.errors += 1
             }
         }
+        scanReporter.finish()
+        
+        if assetsToProcess.isEmpty {
+            return stats
+        }
+        
+        let concurrencyLimit = max(1, min(concurrency, assetsToProcess.count))
+        print("⚙️ Processing \(assetsToProcess.count) photos with concurrency \(concurrencyLimit)")
+        let processingReporter = ProgressReporter(total: assetsToProcess.count, label: "Processing faces", interval: max(1, assetsToProcess.count / 1000))
+        let identifiers = assetsToProcess.map { $0.localIdentifier }
+        let results = await FacePipelineCommand.processPhotosConcurrently(
+            assetIdentifiers: identifiers,
+            concurrencyLimit: concurrencyLimit,
+            photoLibraryAdapter: photoLibraryAdapter,
+            faceRecognitionService: faceRecognitionService
+        )
+        
+        var processedCount = 0
+        for result in results {
+            processedCount += 1
+            processingReporter.advance(to: processedCount)
+            
+            if let errorDescription = result.errorDescription {
+                print("   ❌ Error processing photo \(result.assetID): \(errorDescription)")
+                stats.errors += 1
+                continue
+            }
+            
+            stats.photosProcessed += 1
+            stats.facesDetected += result.facesDetected
+            stats.embeddingsGenerated += result.embeddingsGenerated
+            
+            for warning in result.warnings {
+                print("   ⚠️ [\(result.assetID)] \(warning)")
+                stats.errors += 1
+            }
+            
+            for detection in result.detections {
+                try faceStore.saveFaceDetection(detection, connection: connection)
+            }
+            try faceStore.upsertProcessingStatus(assetID: result.assetID, facesDetected: result.facesDetected, connection: connection)
+        }
+        processingReporter.finish()
         
         return stats
     }
@@ -245,9 +238,123 @@ struct FacePipelineCommand: AsyncParsableCommand {
 
 // MARK: - Supporting Types
 
+private struct PhotoProcessingResult: Sendable {
+    let assetID: String
+    let detections: [FaceDetection]
+    let facesDetected: Int
+    let embeddingsGenerated: Int
+    let warnings: [String]
+    let errorDescription: String?
+}
+
 private struct ProcessingStats {
     var photosProcessed: Int = 0
     var facesDetected: Int = 0
     var embeddingsGenerated: Int = 0
     var errors: Int = 0
+}
+
+private extension FacePipelineCommand {
+    static func processPhotosConcurrently(
+        assetIdentifiers: [String],
+        concurrencyLimit: Int,
+        photoLibraryAdapter: PhotoLibraryAdapter,
+        faceRecognitionService: FaceRecognitionService
+    ) async -> [PhotoProcessingResult] {
+        guard !assetIdentifiers.isEmpty else { return [] }
+        return await withTaskGroup(of: PhotoProcessingResult.self) { group in
+            var iterator = assetIdentifiers.makeIterator()
+            let initial = min(concurrencyLimit, assetIdentifiers.count)
+            for _ in 0..<initial {
+                if let next = iterator.next() {
+                    group.addTask {
+                        await processPhoto(
+                            assetIdentifier: next,
+                            photoLibraryAdapter: photoLibraryAdapter,
+                            faceRecognitionService: faceRecognitionService
+                        )
+                    }
+                }
+            }
+            var results: [PhotoProcessingResult] = []
+            while let result = await group.next() {
+                results.append(result)
+                if let next = iterator.next() {
+                    group.addTask {
+                        await processPhoto(
+                            assetIdentifier: next,
+                            photoLibraryAdapter: photoLibraryAdapter,
+                            faceRecognitionService: faceRecognitionService
+                        )
+                    }
+                }
+            }
+            return results
+        }
+    }
+    
+    static func processPhoto(
+        assetIdentifier: String,
+        photoLibraryAdapter: PhotoLibraryAdapter,
+        faceRecognitionService: FaceRecognitionService
+    ) async -> PhotoProcessingResult {
+        guard let asset = photoLibraryAdapter.fetchAssets(with: [assetIdentifier]).first else {
+            return PhotoProcessingResult(
+                assetID: assetIdentifier,
+                detections: [],
+                facesDetected: 0,
+                embeddingsGenerated: 0,
+                warnings: [],
+                errorDescription: ExportError.invalidArgument("Asset \(assetIdentifier) not found").localizedDescription
+            )
+        }
+        let detectionService = FaceDetectionService(photoLibraryAdapter: photoLibraryAdapter)
+        do {
+            let faceDetections = try await detectionService.detectFaces(in: asset)
+            if faceDetections.isEmpty {
+                return PhotoProcessingResult(
+                    assetID: assetIdentifier,
+                    detections: [],
+                    facesDetected: 0,
+                    embeddingsGenerated: 0,
+                    warnings: [],
+                    errorDescription: nil
+                )
+            }
+            var processed: [FaceDetection] = []
+            var warnings: [String] = []
+            for (index, detection) in faceDetections.enumerated() {
+                do {
+                    guard let faceImage = try await detectionService.extractFaceImage(
+                        from: asset,
+                        boundingBox: detection.boundingBox
+                    ) else {
+                        warnings.append("Could not extract face image \(index + 1)")
+                        continue
+                    }
+                    let embedding = try await faceRecognitionService.generateEmbedding(for: faceImage)
+                    processed.append(detection.withFaceEmbedding(embedding))
+                } catch {
+                    warnings.append("Failed to process face \(index + 1): \(error)")
+                }
+            }
+            return PhotoProcessingResult(
+                assetID: assetIdentifier,
+                detections: processed,
+                facesDetected: faceDetections.count,
+                embeddingsGenerated: processed.count,
+                warnings: warnings,
+                errorDescription: nil
+            )
+        } catch {
+            return PhotoProcessingResult(
+                assetID: assetIdentifier,
+                detections: [],
+                facesDetected: 0,
+                embeddingsGenerated: 0,
+                warnings: [],
+                errorDescription: error.localizedDescription
+            )
+        }
+    }
 }

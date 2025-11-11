@@ -273,3 +273,155 @@ public struct StoredCluster {
         self.assetIDs = assetIDs
     }
 }
+
+public struct Person {
+    public let id: UUID
+    public var name: String?
+    public let createdAt: Date
+    public var updatedAt: Date
+    public var mergedInto: UUID?
+    public var isActive: Bool
+
+    public init(
+        id: UUID = UUID(),
+        name: String? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        mergedInto: UUID? = nil,
+        isActive: Bool = true
+    ) {
+        self.id = id
+        self.name = name
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.mergedInto = mergedInto
+        self.isActive = isActive
+    }
+
+    public func withName(_ name: String?) -> Person {
+        Person(
+            id: id,
+            name: name,
+            createdAt: createdAt,
+            updatedAt: Date(),
+            mergedInto: mergedInto,
+            isActive: isActive
+        )
+    }
+
+    public func withMergedInto(_ mergedInto: UUID?) -> Person {
+        Person(
+            id: id,
+            name: name,
+            createdAt: createdAt,
+            updatedAt: Date(),
+            mergedInto: mergedInto,
+            isActive: isActive
+        )
+    }
+
+    public func withIsActive(_ isActive: Bool) -> Person {
+        Person(
+            id: id,
+            name: name,
+            createdAt: createdAt,
+            updatedAt: Date(),
+            mergedInto: mergedInto,
+            isActive: isActive
+        )
+    }
+}
+
+public struct FaceDetection: Sendable {
+    public let id: UUID
+    public let assetID: String
+    public var personID: UUID?
+    public let boundingBox: CGRect
+    public let confidence: Float
+    public var faceEmbedding: [Float]?
+    public let createdAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        assetID: String,
+        personID: UUID? = nil,
+        boundingBox: CGRect,
+        confidence: Float,
+        faceEmbedding: [Float]? = nil,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.assetID = assetID
+        self.personID = personID
+        self.boundingBox = boundingBox
+        self.confidence = confidence
+        self.faceEmbedding = faceEmbedding
+        self.createdAt = createdAt
+    }
+
+    public func withPersonID(_ personID: UUID?) -> FaceDetection {
+        FaceDetection(
+            id: id,
+            assetID: assetID,
+            personID: personID,
+            boundingBox: boundingBox,
+            confidence: confidence,
+            faceEmbedding: faceEmbedding,
+            createdAt: createdAt
+        )
+    }
+
+    public func withFaceEmbedding(_ faceEmbedding: [Float]?) -> FaceDetection {
+        FaceDetection(
+            id: id,
+            assetID: assetID,
+            personID: personID,
+            boundingBox: boundingBox,
+            confidence: confidence,
+            faceEmbedding: faceEmbedding,
+            createdAt: createdAt
+        )
+    }
+}
+
+public struct FaceCluster {
+    public let id: UUID
+    public let representativeFaceID: UUID
+    public var clusterQuality: Float?
+    public var needsReview: Bool
+    public let createdAt: Date
+
+    public init(
+        id: UUID = UUID(),
+        representativeFaceID: UUID,
+        clusterQuality: Float? = nil,
+        needsReview: Bool = false,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.representativeFaceID = representativeFaceID
+        self.clusterQuality = clusterQuality
+        self.needsReview = needsReview
+        self.createdAt = createdAt
+    }
+
+    public func withClusterQuality(_ clusterQuality: Float?) -> FaceCluster {
+        FaceCluster(
+            id: id,
+            representativeFaceID: representativeFaceID,
+            clusterQuality: clusterQuality,
+            needsReview: needsReview,
+            createdAt: createdAt
+        )
+    }
+
+    public func withNeedsReview(_ needsReview: Bool) -> FaceCluster {
+        FaceCluster(
+            id: id,
+            representativeFaceID: representativeFaceID,
+            clusterQuality: clusterQuality,
+            needsReview: needsReview,
+            createdAt: createdAt
+        )
+    }
+}

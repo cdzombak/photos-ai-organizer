@@ -450,6 +450,8 @@ public final class FaceRecognitionService {
     }
 }
 
+extension FaceRecognitionService: @unchecked Sendable {}
+
 // MARK: - Error Types
 
 public enum FaceRecognitionError: Error {

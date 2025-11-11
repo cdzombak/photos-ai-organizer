@@ -42,6 +42,7 @@ photos-ai-organizer process-faces --config photos-config.yml
 - `--after-date <date>`: Only process photos after this date (ISO 8601 format)
 - `--no-clustering`: Skip clustering step (default: runs clustering)
 - `--force-reprocess`: Reprocess already processed photos
+- `--concurrency <number>`: Limit how many photos are processed simultaneously (default: number of CPU cores)
 
 **Example with options:**
 ```bash
