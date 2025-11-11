@@ -166,7 +166,7 @@ struct FacePipelineCommand: AsyncParsableCommand {
         
         let concurrencyLimit = max(1, min(concurrency, assetsToProcess.count))
         print("⚙️ Processing \(assetsToProcess.count) photos with concurrency \(concurrencyLimit)")
-        let processingReporter = ProgressReporter(total: assetsToProcess.count, label: "Processing faces", interval: max(1, assetsToProcess.count / 1000))
+        let processingReporter = ProgressReporter(total: assetsToProcess.count, label: "Processing faces", interval: max(1, assetsToProcess.count / 100))
         let identifiers = assetsToProcess.map { $0.localIdentifier }
         let results = await FacePipelineCommand.processPhotosConcurrently(
             assetIdentifiers: identifiers,
