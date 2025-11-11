@@ -3,6 +3,27 @@ import PostgresClientKit
 import Core
 
 public struct FaceClusteringService {
+    private struct PersonCentroid {
+        var vector: [Float]
+        var count: Int
+
+        mutating func update(with embedding: [Float]) {
+            guard !embedding.isEmpty else { return }
+            if vector.isEmpty {
+                vector = embedding
+                count = 1
+                return
+            }
+            guard vector.count == embedding.count else { return }
+            let newCount = count + 1
+            for index in vector.indices {
+                let delta = embedding[index] - vector[index]
+                vector[index] += delta / Float(newCount)
+            }
+            count = newCount
+        }
+    }
+
     private let faceStore: FaceStore
     private let recognitionService: FaceRecognitionService
     private let similarityThreshold: Float
@@ -22,7 +43,7 @@ public struct FaceClusteringService {
         var batchNumber = 0
         let existingPersons = try faceStore.getAllActivePersons(connection: connection)
         var personLookup = Dictionary(uniqueKeysWithValues: existingPersons.map { ($0.id, $0) })
-        var representativeEmbeddings = try loadRepresentativeEmbeddings(for: existingPersons, connection: connection)
+        var centroids = try loadPersonCentroids(for: existingPersons, connection: connection)
         var totalProcessed = 0
         
         while true {
@@ -30,21 +51,34 @@ public struct FaceClusteringService {
             guard !unmatchedFaces.isEmpty else { break }
             batchNumber += 1
             print("   🔄 Clustering batch \(batchNumber) containing \(unmatchedFaces.count) faces (processed so far: \(totalProcessed))")
+            var personsTouchedThisBatch: Set<UUID> = []
             
             for face in unmatchedFaces {
                 guard let faceEmbedding = face.faceEmbedding else { continue }
                 totalProcessed += 1
-                let match = bestMatch(for: faceEmbedding, within: representativeEmbeddings)
+                let match = bestMatch(for: faceEmbedding, within: centroids)
                 if let personID = match,
                    let _ = personLookup[personID] {
                     try faceStore.assignFaceToPerson(face.id, personID: personID, connection: connection)
+                    if var centroid = centroids[personID] {
+                        centroid.update(with: faceEmbedding)
+                        centroids[personID] = centroid
+                    } else {
+                        centroids[personID] = PersonCentroid(vector: faceEmbedding, count: 1)
+                    }
+                    personsTouchedThisBatch.insert(personID)
                 } else {
                     let newPerson = try faceStore.createPerson(connection: connection)
                     try faceStore.assignFaceToPerson(face.id, personID: newPerson.id, connection: connection)
                     createdPersons.append(newPerson)
                     personLookup[newPerson.id] = newPerson
-                    representativeEmbeddings[newPerson.id] = faceEmbedding
+                    centroids[newPerson.id] = PersonCentroid(vector: faceEmbedding, count: 1)
+                    personsTouchedThisBatch.insert(newPerson.id)
                 }
+            }
+
+            if !personsTouchedThisBatch.isEmpty {
+                try recomputeCentroids(for: personsTouchedThisBatch, centroids: &centroids, connection: connection)
             }
         }
         
@@ -52,27 +86,62 @@ public struct FaceClusteringService {
         return createdPersons
     }
 
-    private func loadRepresentativeEmbeddings(for persons: [Person], connection: Connection) throws -> [UUID: [Float]] {
-        var map: [UUID: [Float]] = [:]
+    private func loadPersonCentroids(for persons: [Person], connection: Connection) throws -> [UUID: PersonCentroid] {
+        var map: [UUID: PersonCentroid] = [:]
         for person in persons {
-            if let embedding = try faceStore.getRepresentativeEmbedding(for: person.id, connection: connection) {
-                map[person.id] = embedding
-            }
+            let faces = try faceStore.getFacesForPerson(person.id, connection: connection)
+            let embeddings = faces.compactMap { $0.faceEmbedding }
+            guard let centroid = makeCentroid(from: embeddings) else { continue }
+            map[person.id] = centroid
         }
         return map
     }
     
-    private func bestMatch(for embedding: [Float], within candidates: [UUID: [Float]]) -> UUID? {
+    private func bestMatch(for embedding: [Float], within candidates: [UUID: PersonCentroid]) -> UUID? {
         var bestID: UUID?
         var bestSimilarity: Float = similarityThreshold
-        for (id, representative) in candidates {
-            let similarity = recognitionService.compareFaces(embedding, representative)
+        for (id, centroid) in candidates {
+            let similarity = recognitionService.compareFaces(embedding, centroid.vector)
             if similarity >= bestSimilarity {
                 bestSimilarity = similarity
                 bestID = id
             }
         }
         return bestID
+    }
+
+    private func recomputeCentroids(
+        for personIDs: Set<UUID>,
+        centroids: inout [UUID: PersonCentroid],
+        connection: Connection
+    ) throws {
+        for personID in personIDs {
+            let faces = try faceStore.getFacesForPerson(personID, connection: connection)
+            let embeddings = faces.compactMap { $0.faceEmbedding }
+            if let centroid = makeCentroid(from: embeddings) {
+                centroids[personID] = centroid
+            } else {
+                centroids.removeValue(forKey: personID)
+            }
+        }
+    }
+
+    private func makeCentroid(from embeddings: [[Float]]) -> PersonCentroid? {
+        guard let first = embeddings.first, !first.isEmpty else { return nil }
+        var sum = Array(repeating: Float(0), count: first.count)
+        var count = 0
+        for embedding in embeddings where embedding.count == first.count {
+            for index in sum.indices {
+                sum[index] += embedding[index]
+            }
+            count += 1
+        }
+        guard count > 0 else { return nil }
+        var average = sum
+        for index in average.indices {
+            average[index] /= Float(count)
+        }
+        return PersonCentroid(vector: average, count: count)
     }
     
     public func clusterFacesIncremental(connection: Connection, newFaces: [FaceDetection]) async throws -> [Person] {
