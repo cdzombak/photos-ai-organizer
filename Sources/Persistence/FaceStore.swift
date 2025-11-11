@@ -132,6 +132,30 @@ public final class FaceStore {
         
         return detections
     }
+
+    public func getRepresentativeEmbedding(for personID: UUID, connection: Connection) throws -> [Float]? {
+        let sql = """
+        SELECT face_embedding::text
+        FROM face_detections
+        WHERE person_id = $1 AND face_embedding IS NOT NULL
+        ORDER BY created_at ASC
+        LIMIT 1;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute(parameterValues: [personID.uuidString])
+        for row in cursor {
+            let resolved = try row.get()
+            if let embeddingText = try resolved.columns[0].optionalString(),
+               let data = embeddingText.data(using: .utf8),
+               let array = try JSONSerialization.jsonObject(with: data) as? [Double] {
+                return array.map { Float($0) }
+            }
+        }
+
+        return nil
+    }
     
     public func getFacesForPerson(_ personID: UUID, connection: Connection) throws -> [FaceDetection] {
         let sql = """

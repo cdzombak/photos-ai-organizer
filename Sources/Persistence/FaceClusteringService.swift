@@ -17,70 +17,62 @@ public struct FaceClusteringService {
         self.similarityThreshold = similarityThreshold
     }
     
-    public func clusterUnmatchedFaces(connection: Connection) async throws -> [Person] {
-        // Get all unmatched faces with embeddings
-        let unmatchedFaces = try faceStore.getUnmatchedFaces(connection: connection, limit: 1000)
-        guard !unmatchedFaces.isEmpty else {
-            return []
-        }
-        
-        // Get existing persons for comparison
+    public func clusterUnmatchedFaces(connection: Connection, batchSize: Int = 2000) async throws -> [Person] {
+        var createdPersons: [Person] = []
+        var batchNumber = 0
         let existingPersons = try faceStore.getAllActivePersons(connection: connection)
+        var personLookup = Dictionary(uniqueKeysWithValues: existingPersons.map { ($0.id, $0) })
+        var representativeEmbeddings = try loadRepresentativeEmbeddings(for: existingPersons, connection: connection)
+        var totalProcessed = 0
         
-        var newPersons: [Person] = []
-        var processedFaces: Set<UUID> = []
-        
-        // Process each unmatched face
-        for face in unmatchedFaces {
-            guard !processedFaces.contains(face.id),
-                  let faceEmbedding = face.faceEmbedding else {
-                continue
-            }
+        while true {
+            let unmatchedFaces = try faceStore.getUnmatchedFaces(connection: connection, limit: batchSize)
+            guard !unmatchedFaces.isEmpty else { break }
+            batchNumber += 1
+            print("   🔄 Clustering batch \(batchNumber) containing \(unmatchedFaces.count) faces (processed so far: \(totalProcessed))")
             
-            var bestMatch: (person: Person?, similarity: Float) = (nil, 0.0)
-            
-            // Try to match against existing persons
-            for person in existingPersons {
-                let personFaces = try faceStore.getFacesForPerson(person.id, connection: connection)
-                guard let representativeFace = personFaces.first,
-                      let representativeEmbedding = representativeFace.faceEmbedding else {
-                    continue
-                }
-                
-                let similarity = recognitionService.compareFaces(faceEmbedding, representativeEmbedding)
-                if similarity >= similarityThreshold && similarity > bestMatch.similarity {
-                    bestMatch = (person, similarity)
+            for face in unmatchedFaces {
+                guard let faceEmbedding = face.faceEmbedding else { continue }
+                totalProcessed += 1
+                let match = bestMatch(for: faceEmbedding, within: representativeEmbeddings)
+                if let personID = match,
+                   let _ = personLookup[personID] {
+                    try faceStore.assignFaceToPerson(face.id, personID: personID, connection: connection)
+                } else {
+                    let newPerson = try faceStore.createPerson(connection: connection)
+                    try faceStore.assignFaceToPerson(face.id, personID: newPerson.id, connection: connection)
+                    createdPersons.append(newPerson)
+                    personLookup[newPerson.id] = newPerson
+                    representativeEmbeddings[newPerson.id] = faceEmbedding
                 }
             }
-            
-            // Try to match against faces processed in this batch
-            for newPerson in newPersons {
-                let personFaces = try faceStore.getFacesForPerson(newPerson.id, connection: connection)
-                guard let representativeFace = personFaces.first,
-                      let representativeEmbedding = representativeFace.faceEmbedding else {
-                    continue
-                }
-                
-                let similarity = recognitionService.compareFaces(faceEmbedding, representativeEmbedding)
-                if similarity >= similarityThreshold && similarity > bestMatch.similarity {
-                    bestMatch = (newPerson, similarity)
-                }
-            }
-            
-            if let matchedPerson = bestMatch.person {
-                // Assign face to existing person
-                try faceStore.assignFaceToPerson(face.id, personID: matchedPerson.id, connection: connection)
-            } else {
-                // Create new person for this face
-                let newPerson = try faceStore.createPerson(connection: connection)
-                try faceStore.assignFaceToPerson(face.id, personID: newPerson.id, connection: connection)
-                newPersons.append(newPerson)
-            }
-            
-            processedFaces.insert(face.id)
         }
         
-        return newPersons
+        print("   ✅ Clustering completed. Processed \(totalProcessed) faces, created \(createdPersons.count) new persons.")
+        return createdPersons
+    }
+
+    private func loadRepresentativeEmbeddings(for persons: [Person], connection: Connection) throws -> [UUID: [Float]] {
+        var map: [UUID: [Float]] = [:]
+        for person in persons {
+            if let embedding = try faceStore.getRepresentativeEmbedding(for: person.id, connection: connection) {
+                map[person.id] = embedding
+            }
+        }
+        return map
+    }
+    
+    private func bestMatch(for embedding: [Float], within candidates: [UUID: [Float]]) -> UUID? {
+        var bestID: UUID?
+        var bestSimilarity: Float = similarityThreshold
+        for (id, representative) in candidates {
+            let similarity = recognitionService.compareFaces(embedding, representative)
+            if similarity >= bestSimilarity {
+                bestSimilarity = similarity
+                bestID = id
+            }
+        }
+        return bestID
     }
     
     public func clusterFacesIncremental(connection: Connection, newFaces: [FaceDetection]) async throws -> [Person] {
