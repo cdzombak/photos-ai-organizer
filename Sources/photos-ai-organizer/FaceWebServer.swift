@@ -400,6 +400,13 @@ private final class FaceDataProvider: @unchecked Sendable {
                 similarityThreshold: similarityThreshold
             )
             try await service.mergePersons(sourceID, targetID, connection: connection)
+
+            // Clear the source person's name to avoid autocomplete pollution
+            guard let sourcePerson = try faceStore.getPerson(sourceID, connection: connection) else {
+                return
+            }
+            let clearedPerson = sourcePerson.withName(nil)
+            try faceStore.savePerson(clearedPerson, connection: connection)
         }
     }
 
