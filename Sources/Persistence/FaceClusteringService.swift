@@ -38,7 +38,7 @@ public struct FaceClusteringService {
         self.similarityThreshold = similarityThreshold
     }
     
-    public func clusterUnmatchedFaces(connection: Connection, batchSize: Int = 2000, kNeighbors: Int = 10, votingThreshold: Float = 0.4) async throws -> [Person] {
+    public func clusterUnmatchedFaces(connection: Connection, batchSize: Int = 2000, kNeighbors: Int = 10, votingThreshold: Float = 0.6) async throws -> [Person] {
         var createdPersons: [Person] = []
         var batchNumber = 0
         let existingPersons = try faceStore.getAllActivePersons(connection: connection)
