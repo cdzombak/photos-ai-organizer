@@ -32,7 +32,7 @@ struct ClusterFacesCommand: AsyncParsableCommand {
         // Run database migrations
         print("📊 Running database migrations...")
         let migrationRunner = MigrationRunner(connection: connection)
-        try migrationRunner.run([.createFaceTables, .addPersonQualityColumn, .addAutoMergeFlag, .addFavoriteFaceColumn])
+        try migrationRunner.run([.createFaceTables, .addPersonQualityColumn, .addAutoMergeFlag, .addFavoriteFaceColumn, .addNeedsReprocessingColumn])
 
         let faceStore = FaceStore(config: config)
         let recognitionService = FaceRecognitionService()
@@ -47,6 +47,29 @@ struct ClusterFacesCommand: AsyncParsableCommand {
             print("🔄 Resetting unnamed unmerged persons...")
             let resetCount = try faceStore.resetUnnamedUnmergedPersons(connection: connection)
             print("   ✅ Reset \(resetCount) unnamed unmerged persons")
+        }
+
+        // Process persons flagged for reprocessing
+        let flaggedPersons = try faceStore.getPersonsFlaggedForReprocessing(connection: connection)
+        if !flaggedPersons.isEmpty {
+            print("🔧 Processing \(flaggedPersons.count) persons flagged for reprocessing...")
+            for person in flaggedPersons {
+                // Get all faces for this person
+                let faces = try faceStore.getFacesForPerson(person.id, includeMergedDescendants: false, connection: connection)
+
+                // Unassign all faces
+                for face in faces {
+                    try faceStore.unassignFaceFromPerson(face.id, connection: connection)
+                }
+
+                // Clear the flag and deactivate the person
+                let updated = person
+                    .withNeedsReprocessing(false)
+                    .withIsActive(false)
+                try faceStore.savePerson(updated, connection: connection)
+
+                print("   ✅ Unassigned \(faces.count) faces from \(person.name ?? "Unnamed person")")
+            }
         }
 
         // Execute clustering

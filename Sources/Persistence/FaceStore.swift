@@ -557,6 +557,66 @@ public final class FaceStore {
         _ = try statement.execute(parameterValues: params)
     }
 
+    public func getPersonsFlaggedForReprocessing(connection: Connection) throws -> [Person] {
+        let sql = """
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing
+        FROM persons
+        WHERE needs_reprocessing = true AND is_active = true
+        ORDER BY created_at ASC;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute()
+        var persons: [Person] = []
+
+        for row in cursor {
+            let resolved = try row.get()
+            guard let idString = try resolved.columns[0].optionalString(),
+                  let id = UUID(uuidString: idString),
+                  let createdAt = try resolved.columns[2].optionalTimestampWithTimeZone()?.date,
+                  let updatedAt = try resolved.columns[3].optionalTimestampWithTimeZone()?.date,
+                  let isActive = try resolved.columns[5].optionalBool() else {
+                continue
+            }
+
+            let name = try resolved.columns[1].optionalString()
+            let mergedIntoString = try resolved.columns[4].optionalString()
+            let mergedInto = mergedIntoString != nil ? UUID(uuidString: mergedIntoString!) : nil
+            let quality = try resolved.columns[6].optionalDouble().map(Float.init)
+            let mergedByAuto = try resolved.columns[7].optionalBool() ?? false
+            let favoriteFaceIDString = try resolved.columns[8].optionalString()
+            let favoriteFaceID = favoriteFaceIDString != nil ? UUID(uuidString: favoriteFaceIDString!) : nil
+            let needsReprocessing = try resolved.columns[9].optionalBool() ?? false
+
+            persons.append(Person(
+                id: id,
+                name: name,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                mergedInto: mergedInto,
+                isActive: isActive,
+                clusterQuality: quality,
+                mergedByAuto: mergedByAuto,
+                favoriteFaceID: favoriteFaceID,
+                needsReprocessing: needsReprocessing
+            ))
+        }
+
+        return persons
+    }
+
+    public func unassignFaceFromPerson(_ faceID: UUID, connection: Connection) throws {
+        let sql = """
+        UPDATE face_detections
+        SET person_id = NULL
+        WHERE id = $1;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute(parameterValues: [faceID.uuidString])
+    }
+
     public func resetUnnamedUnmergedPersons(connection: Connection) throws -> Int {
         // Count persons to be reset (unnamed, unmerged, and not referenced by other persons)
         let countSQL = """
