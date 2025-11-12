@@ -313,9 +313,9 @@ public struct FaceClusteringService {
         }
         
         if reassignFaces {
-            // Get all faces from source person
-            let sourceFaces = try faceStore.getFacesForPerson(sourcePersonID, connection: connection)
-            
+            // Get all faces from source person, including any from previously merged persons
+            let sourceFaces = try faceStore.getFacesForPerson(sourcePersonID, includeMergedDescendants: true, connection: connection)
+
             // Reassign all faces to target person
             for face in sourceFaces {
                 try faceStore.assignFaceToPerson(face.id, personID: targetPersonID, connection: connection)
