@@ -66,13 +66,20 @@ public struct FaceClusteringService {
                 let maxDistance = 1.0 - similarityThreshold
                 let validNeighbors = nearestNeighbors.filter { $0.distance <= maxDistance }
 
-                let votedPersonID = voteOnPerson(from: validNeighbors, votingThreshold: votingThreshold)
+                // Try voting first for robustness
+                var assignedPersonID = voteOnPerson(from: validNeighbors, votingThreshold: votingThreshold)
 
-                if let personID = votedPersonID, let _ = personLookup[personID] {
-                    // Assign to winning person from k-NN vote
+                // If no voting consensus but we have valid neighbors, fall back to best match
+                // This prevents over-fragmentation when persons have few faces
+                if assignedPersonID == nil && !validNeighbors.isEmpty {
+                    assignedPersonID = validNeighbors.min(by: { $0.distance < $1.distance })?.personID
+                }
+
+                if let personID = assignedPersonID, let _ = personLookup[personID] {
+                    // Assign to person from voting or best match
                     try faceStore.assignFaceToPerson(face.id, personID: personID, connection: connection)
                 } else {
-                    // No strong vote consensus or no similar neighbors, create new person
+                    // No similar neighbors at all, create new person
                     let newPerson = try faceStore.createPerson(connection: connection)
                     try faceStore.assignFaceToPerson(face.id, personID: newPerson.id, connection: connection)
                     createdPersons.append(newPerson)
