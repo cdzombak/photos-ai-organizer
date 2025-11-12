@@ -223,6 +223,13 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
                 }
                 try dataProvider.setFavoriteFace(personID: personID, faceID: json.faceID)
                 return respond(status: .noContent, context: context)
+            } else if pathComponents.count == 4,
+                      pathComponents[0] == "api",
+                      pathComponents[1] == "persons",
+                      pathComponents[3] == "reprocess",
+                      let personID = UUID(uuidString: String(pathComponents[2])) {
+                try dataProvider.markPersonForReprocessing(personID: personID)
+                return respond(status: .noContent, context: context)
             } else {
                 return respond(status: .notFound, context: context)
             }
@@ -447,6 +454,16 @@ private final class FaceDataProvider: @unchecked Sendable {
     func setFavoriteFace(personID: UUID, faceID: UUID?) throws {
         try withConnection { connection in
             try faceStore.updateFavoriteFace(personID, faceID: faceID, connection: connection)
+        }
+    }
+
+    func markPersonForReprocessing(personID: UUID) throws {
+        try withConnection { connection in
+            guard let person = try faceStore.getPerson(personID, connection: connection) else {
+                throw FaceDataError.personNotFound
+            }
+            let updated = person.withNeedsReprocessing(true)
+            try faceStore.savePerson(updated, connection: connection)
         }
     }
 
@@ -730,6 +747,7 @@ private enum FaceWebAssets {
                 <span id=\"save-status\" class=\"save-status\"></span>
               </div>
               <p id=\"drawer-meta\"></p>
+              <button id=\"reprocess-btn\" class=\"reprocess-btn\" title=\"Flag for reprocessing with higher threshold\">Reprocess cluster</button>
             </div>
             <button id=\"drawer-close\" aria-label=\"Close\">&times;</button>
           </div>
@@ -1055,6 +1073,25 @@ private enum FaceWebAssets {
       color: rgba(0,0,0,0.5);
       font-style: italic;
     }
+    .reprocess-btn {
+      margin-top: 8px;
+      padding: 8px 16px;
+      background: #ff9500;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.15s;
+    }
+    .reprocess-btn:hover {
+      background: #ff8000;
+      transform: translateY(-1px);
+    }
+    .reprocess-btn:active {
+      transform: translateY(0);
+    }
     .hidden {
       display: none !important;
     }
@@ -1153,6 +1190,7 @@ private enum FaceWebAssets {
 
     function setupDrawer() {
       document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+      document.getElementById('reprocess-btn').addEventListener('click', reprocessCurrentPerson);
     }
 
     function setupNameEditor() {
@@ -1933,6 +1971,27 @@ private enum FaceWebAssets {
       } catch (error) {
         console.error(error);
         alert('Unable to set favorite face. Check the console for details.');
+      }
+    }
+
+    async function reprocessCurrentPerson() {
+      if (!state.currentPersonID) return;
+
+      const confirmMsg = 'Flag this cluster for reprocessing? The next time you run cluster-faces, faces will be unassigned and re-clustered with a higher similarity threshold.';
+      if (!confirm(confirmMsg)) return;
+
+      try {
+        const response = await fetch(`/api/persons/${state.currentPersonID}/reprocess`, {
+          method: 'POST'
+        });
+        if (!response.ok) throw new Error('Failed to flag person for reprocessing');
+
+        alert('Cluster flagged for reprocessing. Run cluster-faces to re-cluster these faces.');
+        closeDrawer();
+        await refreshData();
+      } catch (error) {
+        console.error(error);
+        alert('Unable to flag cluster for reprocessing. Check the console for details.');
       }
     }
 
