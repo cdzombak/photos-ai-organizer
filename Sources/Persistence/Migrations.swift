@@ -86,7 +86,19 @@ public extension MigrationStep {
         statements: [
             """
             ALTER TABLE persons
-            ADD COLUMN IF NOT EXISTS favorite_face_id UUID REFERENCES face_detections(id);
+            ADD COLUMN IF NOT EXISTS favorite_face_id UUID;
+            """,
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'persons_favorite_face_id_fkey'
+                ) THEN
+                    ALTER TABLE persons
+                    ADD CONSTRAINT persons_favorite_face_id_fkey
+                    FOREIGN KEY (favorite_face_id) REFERENCES face_detections(id);
+                END IF;
+            END $$;
             """
         ]
     )
