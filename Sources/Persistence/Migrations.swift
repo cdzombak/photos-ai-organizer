@@ -90,6 +90,16 @@ public extension MigrationStep {
             """
         ]
     )
+
+    static let addNeedsReprocessingColumn = MigrationStep(
+        identifier: "005_add_needs_reprocessing",
+        statements: [
+            """
+            ALTER TABLE persons
+            ADD COLUMN IF NOT EXISTS needs_reprocessing BOOLEAN DEFAULT FALSE;
+            """
+        ]
+    )
 }
 
 protocol SQLCommandExecutor {

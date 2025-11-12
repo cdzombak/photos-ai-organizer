@@ -284,6 +284,7 @@ public struct Person {
     public var clusterQuality: Float?
     public var mergedByAuto: Bool
     public var favoriteFaceID: UUID?
+    public var needsReprocessing: Bool
 
     public init(
         id: UUID = UUID(),
@@ -294,7 +295,8 @@ public struct Person {
         isActive: Bool = true,
         clusterQuality: Float? = nil,
         mergedByAuto: Bool = false,
-        favoriteFaceID: UUID? = nil
+        favoriteFaceID: UUID? = nil,
+        needsReprocessing: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -305,6 +307,7 @@ public struct Person {
         self.clusterQuality = clusterQuality
         self.mergedByAuto = mergedByAuto
         self.favoriteFaceID = favoriteFaceID
+        self.needsReprocessing = needsReprocessing
     }
 
     public func withName(_ name: String?) -> Person {
@@ -317,7 +320,8 @@ public struct Person {
             isActive: isActive,
             clusterQuality: clusterQuality,
             mergedByAuto: mergedByAuto,
-            favoriteFaceID: favoriteFaceID
+            favoriteFaceID: favoriteFaceID,
+            needsReprocessing: needsReprocessing
         )
     }
 
@@ -331,7 +335,8 @@ public struct Person {
             isActive: isActive,
             clusterQuality: clusterQuality,
             mergedByAuto: mergedByAuto,
-            favoriteFaceID: favoriteFaceID
+            favoriteFaceID: favoriteFaceID,
+            needsReprocessing: needsReprocessing
         )
     }
 
@@ -345,7 +350,8 @@ public struct Person {
             isActive: isActive,
             clusterQuality: clusterQuality,
             mergedByAuto: mergedByAuto,
-            favoriteFaceID: favoriteFaceID
+            favoriteFaceID: favoriteFaceID,
+            needsReprocessing: needsReprocessing
         )
     }
 
@@ -359,7 +365,8 @@ public struct Person {
             isActive: isActive,
             clusterQuality: clusterQuality,
             mergedByAuto: mergedByAuto,
-            favoriteFaceID: favoriteFaceID
+            favoriteFaceID: favoriteFaceID,
+            needsReprocessing: needsReprocessing
         )
     }
 
@@ -373,7 +380,23 @@ public struct Person {
             isActive: isActive,
             clusterQuality: clusterQuality,
             mergedByAuto: mergedByAuto,
-            favoriteFaceID: favoriteFaceID
+            favoriteFaceID: favoriteFaceID,
+            needsReprocessing: needsReprocessing
+        )
+    }
+
+    public func withNeedsReprocessing(_ needsReprocessing: Bool) -> Person {
+        Person(
+            id: id,
+            name: name,
+            createdAt: createdAt,
+            updatedAt: Date(),
+            mergedInto: mergedInto,
+            isActive: isActive,
+            clusterQuality: clusterQuality,
+            mergedByAuto: mergedByAuto,
+            favoriteFaceID: favoriteFaceID,
+            needsReprocessing: needsReprocessing
         )
     }
 }
