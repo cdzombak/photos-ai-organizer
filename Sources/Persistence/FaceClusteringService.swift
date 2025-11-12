@@ -108,12 +108,16 @@ public struct FaceClusteringService {
 
     private func loadPersonCentroids(for persons: [Person], connection: Connection) throws -> [UUID: PersonCentroid] {
         var map: [UUID: PersonCentroid] = [:]
-        for person in persons {
+        let reporter = ProgressReporter(total: persons.count, label: "Computing centroids", interval: max(1, persons.count / 100))
+
+        for (index, person) in persons.enumerated() {
+            reporter.advance(to: index + 1)
             let faces = try faceStore.getFacesForPerson(person.id, includeMergedDescendants: true, connection: connection)
             let embeddings = faces.compactMap { $0.faceEmbedding }
             guard let centroid = makeCentroid(from: embeddings) else { continue }
             map[person.id] = centroid
         }
+        reporter.finish()
         return map
     }
     
@@ -261,9 +265,7 @@ public struct FaceClusteringService {
         let totalComparisons = (allPersons.count * (allPersons.count - 1)) / 2
 
         // Precompute centroids once for all persons to avoid redundant DB queries and calculations
-        print("   📊 Precomputing centroids for \(allPersons.count) persons...")
         let centroids = try loadPersonCentroids(for: allPersons, connection: connection)
-        print("   ✅ Centroids computed")
 
         let reporter = ProgressReporter(total: totalComparisons, label: "Comparing persons for duplicates", interval: max(1, totalComparisons / 100))
         var comparisonsDone = 0
