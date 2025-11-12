@@ -219,7 +219,7 @@ extension PhotoLibraryAdapter {
         options.predicate = NSPredicate(format: "mediaType == %d AND isHidden == NO", PHAssetMediaType.image.rawValue)
         options.includeHiddenAssets = false
         options.includeAllBurstAssets = false
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         return PHAsset.fetchAssets(with: options)
     }
 }
