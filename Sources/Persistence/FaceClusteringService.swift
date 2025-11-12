@@ -85,8 +85,13 @@ public struct FaceClusteringService {
                     // No similar neighbors at all, create new person
                     let newPerson = try faceStore.createPerson(connection: connection)
                     try faceStore.assignFaceToPerson(face.id, personID: newPerson.id, connection: connection)
-                    createdPersons.append(newPerson)
-                    personLookup[newPerson.id] = newPerson
+
+                    // Set this first (most recent) face as the favorite/default for the new person
+                    let personWithFavorite = newPerson.withFavoriteFaceID(face.id)
+                    try faceStore.savePerson(personWithFavorite, connection: connection)
+
+                    createdPersons.append(personWithFavorite)
+                    personLookup[personWithFavorite.id] = personWithFavorite
                 }
             }
         }
@@ -221,7 +226,12 @@ public struct FaceClusteringService {
                 // Create new person for this face
                 let newPerson = try faceStore.createPerson(connection: connection)
                 try faceStore.assignFaceToPerson(face.id, personID: newPerson.id, connection: connection)
-                newPersons.append(newPerson)
+
+                // Set this first (most recent) face as the favorite/default for the new person
+                let personWithFavorite = newPerson.withFavoriteFaceID(face.id)
+                try faceStore.savePerson(personWithFavorite, connection: connection)
+
+                newPersons.append(personWithFavorite)
             }
         }
         
@@ -389,14 +399,20 @@ public struct FaceClusteringService {
         guard try faceStore.getPerson(personID, connection: connection) != nil else {
             throw ClusteringError.personNotFound
         }
-        
+
+        guard !faceIds.isEmpty else { return }
+
         // Create new person for the split faces
         let newPerson = try faceStore.createPerson(connection: connection)
-        
+
         // Reassign specified faces to new person
         for faceId in faceIds {
             try faceStore.assignFaceToPerson(faceId, personID: newPerson.id, connection: connection)
         }
+
+        // Set the first face as the favorite for the new person
+        let personWithFavorite = newPerson.withFavoriteFaceID(faceIds[0])
+        try faceStore.savePerson(personWithFavorite, connection: connection)
     }
     
     public func computeClusterQuality(for personID: UUID, connection: Connection) async throws -> Float {
