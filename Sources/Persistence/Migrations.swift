@@ -70,6 +70,16 @@ public extension MigrationStep {
             """
         ]
     )
+
+    static let addAutoMergeFlag = MigrationStep(
+        identifier: "003_add_auto_merge_flag",
+        statements: [
+            """
+            ALTER TABLE persons
+            ADD COLUMN IF NOT EXISTS merged_by_auto BOOLEAN NOT NULL DEFAULT FALSE;
+            """
+        ]
+    )
 }
 
 protocol SQLCommandExecutor {

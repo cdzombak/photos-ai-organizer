@@ -282,6 +282,7 @@ public struct Person {
     public var mergedInto: UUID?
     public var isActive: Bool
     public var clusterQuality: Float?
+    public var mergedByAuto: Bool
 
     public init(
         id: UUID = UUID(),
@@ -290,7 +291,8 @@ public struct Person {
         updatedAt: Date = Date(),
         mergedInto: UUID? = nil,
         isActive: Bool = true,
-        clusterQuality: Float? = nil
+        clusterQuality: Float? = nil,
+        mergedByAuto: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -299,6 +301,7 @@ public struct Person {
         self.mergedInto = mergedInto
         self.isActive = isActive
         self.clusterQuality = clusterQuality
+        self.mergedByAuto = mergedByAuto
     }
 
     public func withName(_ name: String?) -> Person {
@@ -309,7 +312,8 @@ public struct Person {
             updatedAt: Date(),
             mergedInto: mergedInto,
             isActive: isActive,
-            clusterQuality: clusterQuality
+            clusterQuality: clusterQuality,
+            mergedByAuto: mergedByAuto
         )
     }
 
@@ -321,7 +325,8 @@ public struct Person {
             updatedAt: Date(),
             mergedInto: mergedInto,
             isActive: isActive,
-            clusterQuality: clusterQuality
+            clusterQuality: clusterQuality,
+            mergedByAuto: mergedByAuto
         )
     }
 
@@ -333,7 +338,21 @@ public struct Person {
             updatedAt: Date(),
             mergedInto: mergedInto,
             isActive: isActive,
-            clusterQuality: clusterQuality
+            clusterQuality: clusterQuality,
+            mergedByAuto: mergedByAuto
+        )
+    }
+
+    public func withMergedByAuto(_ mergedByAuto: Bool) -> Person {
+        Person(
+            id: id,
+            name: name,
+            createdAt: createdAt,
+            updatedAt: Date(),
+            mergedInto: mergedInto,
+            isActive: isActive,
+            clusterQuality: clusterQuality,
+            mergedByAuto: mergedByAuto
         )
     }
 }

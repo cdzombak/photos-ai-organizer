@@ -11,14 +11,15 @@ public final class FaceStore {
     
     public func savePerson(_ person: Person, connection: Connection) throws {
         let sql = """
-        INSERT INTO persons (id, name, created_at, updated_at, merged_into, is_active, cluster_quality)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO persons (id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             updated_at = EXCLUDED.updated_at,
             merged_into = EXCLUDED.merged_into,
             is_active = EXCLUDED.is_active,
-            cluster_quality = EXCLUDED.cluster_quality;
+            cluster_quality = EXCLUDED.cluster_quality,
+            merged_by_auto = EXCLUDED.merged_by_auto;
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
@@ -30,7 +31,8 @@ public final class FaceStore {
             PostgresTimestampWithTimeZone(date: person.updatedAt),
             person.mergedInto?.uuidString,
             person.isActive,
-            person.clusterQuality.map { Double($0) }
+            person.clusterQuality.map { Double($0) },
+            person.mergedByAuto
         ]
         _ = try statement.execute(parameterValues: params)
     }
@@ -159,14 +161,35 @@ public final class FaceStore {
         return nil
     }
     
-    public func getFacesForPerson(_ personID: UUID, connection: Connection) throws -> [FaceDetection] {
-        let sql = """
-        SELECT id, asset_id, person_id, bounding_x, bounding_y, 
-               bounding_width, bounding_height, confidence, face_embedding::text, created_at
-        FROM face_detections
-        WHERE person_id = $1
-        ORDER BY created_at DESC;
-        """
+    public func getFacesForPerson(
+        _ personID: UUID,
+        includeMergedDescendants: Bool = false,
+        connection: Connection
+    ) throws -> [FaceDetection] {
+        let sql: String
+        if includeMergedDescendants {
+            sql = """
+            WITH RECURSIVE person_tree AS (
+                SELECT id FROM persons WHERE id = $1
+                UNION ALL
+                SELECT p.id FROM persons p
+                JOIN person_tree pt ON p.merged_into = pt.id
+            )
+            SELECT id, asset_id, person_id, bounding_x, bounding_y,
+                   bounding_width, bounding_height, confidence, face_embedding::text, created_at
+            FROM face_detections
+            WHERE person_id IN (SELECT id FROM person_tree)
+            ORDER BY created_at DESC;
+            """
+        } else {
+            sql = """
+            SELECT id, asset_id, person_id, bounding_x, bounding_y, 
+                   bounding_width, bounding_height, confidence, face_embedding::text, created_at
+            FROM face_detections
+            WHERE person_id = $1
+            ORDER BY created_at DESC;
+            """
+        }
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
         
@@ -218,6 +241,84 @@ public final class FaceStore {
         return detections
     }
 
+    public func getFaceCountForPerson(
+        _ personID: UUID,
+        includeMergedDescendants: Bool,
+        connection: Connection
+    ) throws -> Int {
+        let sql: String
+        if includeMergedDescendants {
+            sql = """
+            WITH RECURSIVE person_tree AS (
+                SELECT id FROM persons WHERE id = $1
+                UNION ALL
+                SELECT p.id FROM persons p
+                JOIN person_tree pt ON p.merged_into = pt.id
+            )
+            SELECT COUNT(*)
+            FROM face_detections
+            WHERE person_id IN (SELECT id FROM person_tree);
+            """
+        } else {
+            sql = """
+            SELECT COUNT(*)
+            FROM face_detections
+            WHERE person_id = $1;
+            """
+        }
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        let cursor = try statement.execute(parameterValues: [personID.uuidString])
+        for row in cursor {
+            let resolved = try row.get()
+            if let count = try resolved.columns[0].optionalInt() {
+                return count
+            }
+        }
+        return 0
+    }
+
+    public func getSampleFaceIDForPerson(
+        _ personID: UUID,
+        includeMergedDescendants: Bool,
+        connection: Connection
+    ) throws -> UUID? {
+        let sql: String
+        if includeMergedDescendants {
+            sql = """
+            WITH RECURSIVE person_tree AS (
+                SELECT id FROM persons WHERE id = $1
+                UNION ALL
+                SELECT p.id FROM persons p
+                JOIN person_tree pt ON p.merged_into = pt.id
+            )
+            SELECT id
+            FROM face_detections
+            WHERE person_id IN (SELECT id FROM person_tree)
+            ORDER BY created_at ASC
+            LIMIT 1;
+            """
+        } else {
+            sql = """
+            SELECT id
+            FROM face_detections
+            WHERE person_id = $1
+            ORDER BY created_at ASC
+            LIMIT 1;
+            """
+        }
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        let cursor = try statement.execute(parameterValues: [personID.uuidString])
+        for row in cursor {
+            let resolved = try row.get()
+            if let idString = try resolved.columns[0].optionalString(), let id = UUID(uuidString: idString) {
+                return id
+            }
+        }
+        return nil
+    }
+
     public func getFaceEmbeddings(for personID: UUID, limit: Int, connection: Connection) throws -> [[Float]] {
         let sql = """
         SELECT face_embedding::text
@@ -266,7 +367,7 @@ public final class FaceStore {
     
     public func getPerson(_ personID: UUID, connection: Connection) throws -> Person? {
         let sql = """
-        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto
         FROM persons
         WHERE id = $1;
         """
@@ -280,8 +381,7 @@ public final class FaceStore {
                   let id = UUID(uuidString: idString),
                   let createdAt = try resolved.columns[2].optionalTimestampWithTimeZone()?.date,
                   let updatedAt = try resolved.columns[3].optionalTimestampWithTimeZone()?.date,
-                  let isActive = try resolved.columns[5].optionalBool(),
-                  isActive == true else {
+                  let isActive = try resolved.columns[5].optionalBool() else {
                 continue
             }
             
@@ -289,6 +389,7 @@ public final class FaceStore {
             let mergedIntoString = try resolved.columns[4].optionalString()
             let mergedInto = mergedIntoString != nil ? UUID(uuidString: mergedIntoString!) : nil
             let quality = try resolved.columns[6].optionalDouble().map(Float.init)
+            let mergedByAuto = try resolved.columns[7].optionalBool() ?? false
             
             return Person(
                 id: id,
@@ -297,16 +398,84 @@ public final class FaceStore {
                 updatedAt: updatedAt,
                 mergedInto: mergedInto,
                 isActive: isActive,
-                clusterQuality: quality
+                clusterQuality: quality,
+                mergedByAuto: mergedByAuto
             )
         }
 
         return nil
     }
+
+    public func getAutoMergedPersons(connection: Connection) throws -> [(Person, Person)] {
+        let sql = """
+        SELECT
+            source.id, source.name, source.created_at, source.updated_at, source.merged_into,
+            source.is_active, source.cluster_quality, source.merged_by_auto,
+            target.id, target.name, target.created_at, target.updated_at, target.merged_into,
+            target.is_active, target.cluster_quality, target.merged_by_auto
+        FROM persons source
+        JOIN persons target ON source.merged_into = target.id
+        WHERE source.merged_by_auto = TRUE
+        ORDER BY source.updated_at DESC;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute()
+        var results: [(Person, Person)] = []
+        for row in cursor {
+            let resolved = try row.get()
+            guard let sourceIDString = try resolved.columns[0].optionalString(),
+                  let sourceID = UUID(uuidString: sourceIDString),
+                  let sourceCreatedAt = try resolved.columns[2].optionalTimestampWithTimeZone()?.date,
+                  let sourceUpdatedAt = try resolved.columns[3].optionalTimestampWithTimeZone()?.date,
+                  let sourceIsActive = try resolved.columns[5].optionalBool(),
+                  let targetIDString = try resolved.columns[8].optionalString(),
+                  let targetID = UUID(uuidString: targetIDString),
+                  let targetCreatedAt = try resolved.columns[10].optionalTimestampWithTimeZone()?.date,
+                  let targetUpdatedAt = try resolved.columns[11].optionalTimestampWithTimeZone()?.date,
+                  let targetIsActive = try resolved.columns[13].optionalBool() else {
+                continue
+            }
+
+            let sourceName = try resolved.columns[1].optionalString()
+            let sourceMergedInto = try resolved.columns[4].optionalString().flatMap(UUID.init)
+            let sourceQuality = try resolved.columns[6].optionalDouble().map(Float.init)
+            let sourceMergedByAuto = try resolved.columns[7].optionalBool() ?? false
+
+            let targetName = try resolved.columns[9].optionalString()
+            let targetMergedInto = try resolved.columns[12].optionalString().flatMap(UUID.init)
+            let targetQuality = try resolved.columns[14].optionalDouble().map(Float.init)
+            let targetMergedByAuto = try resolved.columns[15].optionalBool() ?? false
+
+            let source = Person(
+                id: sourceID,
+                name: sourceName,
+                createdAt: sourceCreatedAt,
+                updatedAt: sourceUpdatedAt,
+                mergedInto: sourceMergedInto,
+                isActive: sourceIsActive,
+                clusterQuality: sourceQuality,
+                mergedByAuto: sourceMergedByAuto
+            )
+            let target = Person(
+                id: targetID,
+                name: targetName,
+                createdAt: targetCreatedAt,
+                updatedAt: targetUpdatedAt,
+                mergedInto: targetMergedInto,
+                isActive: targetIsActive,
+                clusterQuality: targetQuality,
+                mergedByAuto: targetMergedByAuto
+            )
+            results.append((source, target))
+        }
+        return results
+    }
     
     public func getAllActivePersons(connection: Connection) throws -> [Person] {
         let sql = """
-        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto
         FROM persons
         WHERE is_active = true
         ORDER BY created_at ASC;
@@ -332,6 +501,7 @@ public final class FaceStore {
             let mergedIntoString = try resolved.columns[4].optionalString()
             let mergedInto = mergedIntoString != nil ? UUID(uuidString: mergedIntoString!) : nil
             let quality = try resolved.columns[6].optionalDouble().map(Float.init)
+            let mergedByAuto = try resolved.columns[7].optionalBool() ?? false
             
             persons.append(Person(
                 id: id,
@@ -340,7 +510,8 @@ public final class FaceStore {
                 updatedAt: updatedAt,
                 mergedInto: mergedInto,
                 isActive: isActive,
-                clusterQuality: quality
+                clusterQuality: quality,
+                mergedByAuto: mergedByAuto
             ))
         }
 
@@ -576,6 +747,7 @@ public final class FaceStore {
         defer { statement.close() }
         _ = try statement.execute(parameterValues: [quality.map { Double($0) }, personID.uuidString])
     }
+
 }
 
 public struct FaceProcessingStatus: Sendable {

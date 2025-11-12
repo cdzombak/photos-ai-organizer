@@ -76,10 +76,17 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
     }
 
     private func handleRequest(head: HTTPRequestHead, context: ChannelHandlerContext) {
-        guard head.method == .GET else {
-            return respond(status: .methodNotAllowed, context: context)
+        switch head.method {
+        case .GET:
+            handleGET(head: head, context: context)
+        case .POST:
+            handlePOST(head: head, context: context)
+        default:
+            respond(status: .methodNotAllowed, context: context)
         }
+    }
 
+    private func handleGET(head: HTTPRequestHead, context: ChannelHandlerContext) {
         let uriParts = head.uri.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
         let path = String(uriParts.first ?? "")
         let queryString = uriParts.count > 1 ? String(uriParts[1]) : nil
@@ -95,6 +102,9 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
             } else if path == "/api/persons" {
                 let persons = try dataProvider.fetchPersonSummaries()
                 return respondJSON(persons, context: context)
+            } else if path == "/api/auto-merges" {
+                let merges = try dataProvider.fetchAutoMerges()
+                return respondJSON(merges, context: context)
             } else if pathComponents.count == 4,
                       pathComponents[0] == "api",
                       pathComponents[1] == "persons",
@@ -114,6 +124,27 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
                     return respond(status: .notFound, context: context)
                 }
                 return respondBinary(jpeg, contentType: "image/jpeg", context: context)
+            } else {
+                return respond(status: .notFound, context: context)
+            }
+        } catch {
+            print("FaceHTTPHandler error: \(error)")
+            respond(status: .internalServerError, context: context)
+        }
+    }
+
+    private func handlePOST(head: HTTPRequestHead, context: ChannelHandlerContext) {
+        let path = head.uri.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? ""
+        let pathComponents = path.split(separator: "/", omittingEmptySubsequences: true)
+
+        do {
+            if pathComponents.count == 4,
+               pathComponents[0] == "api",
+               pathComponents[1] == "auto-merges",
+               pathComponents[3] == "undo",
+               let sourceID = UUID(uuidString: String(pathComponents[2])) {
+                try dataProvider.undoAutoMerge(sourcePersonID: sourceID)
+                return respond(status: .noContent, context: context)
             } else {
                 return respond(status: .notFound, context: context)
             }
@@ -191,60 +222,39 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
 private final class FaceDataProvider: @unchecked Sendable {
     private let config: PostgresConfig
     private let faceStore: FaceStore
+    private let similarityThreshold: Float
 
     init(config: PostgresConfig) {
         self.config = config
         self.faceStore = FaceStore(config: config)
+        self.similarityThreshold = config.faceRecognitionSimilarityThreshold ?? FaceRecognitionService.similarityThreshold
     }
 
     func fetchPersonSummaries() throws -> [FacePersonSummary] {
         try withConnection { connection in
-            let sql = """
-            SELECT p.id, p.name, p.created_at, p.updated_at,
-                   COALESCE(cnt.face_count, 0) AS face_count,
-                   sample.sample_face_id,
-                   p.cluster_quality
-            FROM persons p
-            LEFT JOIN LATERAL (
-                SELECT COUNT(*) AS face_count
-                FROM face_detections fd
-                WHERE fd.person_id = p.id
-            ) cnt ON true
-            LEFT JOIN LATERAL (
-                SELECT fd.id AS sample_face_id
-                FROM face_detections fd
-                WHERE fd.person_id = p.id
-                ORDER BY fd.created_at ASC
-                LIMIT 1
-            ) sample ON true
-            WHERE p.is_active = true
-            ORDER BY p.created_at ASC;
-            """
-            let statement = try connection.prepareStatement(text: sql)
-            defer { statement.close() }
-            let cursor = try statement.execute()
+            let persons = try faceStore.getAllActivePersons(connection: connection)
             var summaries: [FacePersonSummary] = []
-            for row in cursor {
-                let resolved = try row.get()
-                guard let idString = try resolved.columns[0].optionalString(),
-                      let id = UUID(uuidString: idString),
-                      let createdAt = try resolved.columns[2].optionalTimestampWithTimeZone()?.date,
-                      let updatedAt = try resolved.columns[3].optionalTimestampWithTimeZone()?.date,
-                      let faceCount = try resolved.columns[4].optionalInt() else {
-                    continue
-                }
-                let name = try resolved.columns[1].optionalString()
-                let sampleFaceID = try resolved.columns[5].optionalString().flatMap(UUID.init)
-                let quality = try resolved.columns[6].optionalDouble().map(Float.init)
+            summaries.reserveCapacity(persons.count)
+            for person in persons {
+                let faceCount = try faceStore.getFaceCountForPerson(
+                    person.id,
+                    includeMergedDescendants: true,
+                    connection: connection
+                )
+                let sampleFaceID = try faceStore.getSampleFaceIDForPerson(
+                    person.id,
+                    includeMergedDescendants: true,
+                    connection: connection
+                )
                 summaries.append(FacePersonSummary(
-                    id: id,
-                    name: name,
+                    id: person.id,
+                    name: person.name,
                     faceCount: faceCount,
-                    createdAt: createdAt,
-                    updatedAt: updatedAt,
+                    createdAt: person.createdAt,
+                    updatedAt: person.updatedAt,
                     sampleFaceID: sampleFaceID,
                     sampleImageURL: sampleFaceID.map { "/api/faces/\($0.uuidString)/thumbnail?size=160" },
-                    qualityScore: quality
+                    qualityScore: person.clusterQuality
                 ))
             }
             return summaries
@@ -253,7 +263,13 @@ private final class FaceDataProvider: @unchecked Sendable {
 
     func fetchFaces(forPerson id: UUID) throws -> [FacePreview] {
         try withConnection { connection in
-            let faces = try faceStore.getFacesForPerson(id, connection: connection)
+            let person = try faceStore.getPerson(id, connection: connection)
+            let includeMerged = person?.isActive == true
+            let faces = try faceStore.getFacesForPerson(
+                id,
+                includeMergedDescendants: includeMerged,
+                connection: connection
+            )
             return faces.map { FacePreview(face: $0) }
         }
     }
@@ -264,10 +280,71 @@ private final class FaceDataProvider: @unchecked Sendable {
         }
     }
 
+    func fetchAutoMerges() throws -> [AutoMergeSummary] {
+        try withConnection { connection in
+            let pairs = try faceStore.getAutoMergedPersons(connection: connection)
+            var summaries: [AutoMergeSummary] = []
+            summaries.reserveCapacity(pairs.count)
+            for (source, target) in pairs {
+                guard let sourceSummary = try makeSummary(
+                    for: source,
+                    includeMergedDescendants: false,
+                    connection: connection
+                ), let targetSummary = try makeSummary(
+                    for: target,
+                    includeMergedDescendants: true,
+                    connection: connection
+                ) else {
+                    continue
+                }
+                summaries.append(AutoMergeSummary(source: sourceSummary, target: targetSummary))
+            }
+            return summaries
+        }
+    }
+
+    func undoAutoMerge(sourcePersonID: UUID) throws {
+        try withConnection { connection in
+            let service = FaceClusteringService(
+                faceStore: faceStore,
+                recognitionService: FaceRecognitionService(),
+                similarityThreshold: similarityThreshold
+            )
+            try service.undoAutoMerge(sourcePersonID, connection: connection)
+        }
+    }
+
     private func withConnection<T>(_ body: (Connection) throws -> T) throws -> T {
         let connection = try Connection(configuration: config.makeConnectionConfiguration())
         defer { connection.close() }
         return try body(connection)
+    }
+
+    private func makeSummary(
+        for person: Person,
+        includeMergedDescendants: Bool,
+        connection: Connection
+    ) throws -> FacePersonSummary? {
+        let faceCount = try faceStore.getFaceCountForPerson(
+            person.id,
+            includeMergedDescendants: includeMergedDescendants,
+            connection: connection
+        )
+        let sampleFaceID = try faceStore.getSampleFaceIDForPerson(
+            person.id,
+            includeMergedDescendants: includeMergedDescendants,
+            connection: connection
+        )
+        return FacePersonSummary(
+            id: person.id,
+            name: person.name,
+            faceCount: faceCount,
+            createdAt: person.createdAt,
+            updatedAt: person.updatedAt,
+            sampleFaceID: sampleFaceID,
+            sampleImageURL: sampleFaceID.map { "/api/faces/\($0.uuidString)/thumbnail?size=160" },
+            qualityScore: person.clusterQuality
+        )
     }
 }
 
@@ -387,6 +464,11 @@ private struct FacePersonSummary: Codable {
     let qualityScore: Float?
 }
 
+private struct AutoMergeSummary: Codable {
+    let source: FacePersonSummary
+    let target: FacePersonSummary
+}
+
 private struct FacePreview: Codable {
     struct BoundingBox: Codable {
         let x: Double
@@ -450,6 +532,14 @@ private enum FaceWebAssets {
             <div class=\"grid\" id=\"persons-grid\"></div>
             <div class=\"empty\" id=\"persons-empty\">No persons available.</div>
           </section>
+          <section id=\"auto-merges-view\" class=\"view\">
+            <div class=\"auto-merges-header\">
+              <h2>Automatic merges</h2>
+              <p class=\"subtitle\">Review and undo auto-merged persons</p>
+            </div>
+            <div class=\"merge-list\" id=\"auto-merges-list\"></div>
+            <div class=\"empty\" id=\"auto-merges-empty\">No automatic merges to review.</div>
+          </section>
         </main>
         <div id=\"drawer\" class=\"drawer hidden\">
           <div class=\"drawer-header\">
@@ -510,6 +600,56 @@ private enum FaceWebAssets {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
       gap: 16px;
+    }
+    .auto-merges-header {
+      margin-top: 32px;
+    }
+    .auto-merges-header h2 {
+      margin: 0;
+    }
+    .auto-merges-header .subtitle {
+      margin: 4px 0 0;
+      color: rgba(0,0,0,0.6);
+    }
+    .merge-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .merge-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      align-items: center;
+    }
+    .merge-card .person-snippet {
+      display: flex;
+      flex-direction: row;
+      gap: 12px;
+      align-items: center;
+    }
+    .merge-card img {
+      width: 64px;
+      height: 64px;
+      object-fit: cover;
+      border-radius: 12px;
+      background: #e6e6e6;
+    }
+    .merge-card .actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .merge-card button.secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: inherit;
     }
     .card {
       background: var(--card-bg);
@@ -628,6 +768,7 @@ private enum FaceWebAssets {
     static let appJS = """
     const state = {
       persons: [],
+      autoMerges: [],
       facesCache: new Map(),
       sortMode: 'created',
     };
@@ -655,7 +796,8 @@ private enum FaceWebAssets {
     }
 
     async function refreshData() {
-      await loadPersons();
+      state.facesCache = new Map();
+      await Promise.all([loadPersons(), loadAutoMerges()]);
     }
 
     async function loadPersons() {
@@ -664,6 +806,17 @@ private enum FaceWebAssets {
         if (!response.ok) throw new Error('Failed to load persons');
         state.persons = await response.json();
         renderPersons();
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    async function loadAutoMerges() {
+      try {
+        const response = await fetch('/api/auto-merges');
+        if (!response.ok) throw new Error('Failed to load auto merges');
+        state.autoMerges = await response.json();
+        renderAutoMerges();
       } catch (error) {
         console.error(error);
       }
@@ -686,6 +839,20 @@ private enum FaceWebAssets {
           actionLabel: 'View faces',
           onClick: () => openDrawer(person.id, person.name || 'Person', person.faceCount)
         }));
+      });
+    }
+
+    function renderAutoMerges() {
+      const list = document.getElementById('auto-merges-list');
+      const empty = document.getElementById('auto-merges-empty');
+      list.innerHTML = '';
+      if (!state.autoMerges || state.autoMerges.length === 0) {
+        empty.style.display = 'block';
+        return;
+      }
+      empty.style.display = 'none';
+      state.autoMerges.forEach((merge) => {
+        list.appendChild(createMergeCard(merge));
       });
     }
 
@@ -729,6 +896,73 @@ private enum FaceWebAssets {
       button.addEventListener('click', onClick);
       card.append(img, heading, meta, button);
       return card;
+    }
+
+    function createMergeCard(merge) {
+      const card = document.createElement('div');
+      card.className = 'merge-card';
+      card.append(
+        createPersonSnippet(merge.source, 'Source'),
+        createPersonSnippet(merge.target, 'Target'),
+        createMergeActions(merge)
+      );
+      return card;
+    }
+
+    function createPersonSnippet(person, label) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'person-snippet';
+      const img = document.createElement('img');
+      img.alt = `${label} sample`;
+      if (person.sampleImageURL) {
+        img.src = person.sampleImageURL;
+      } else {
+        img.style.background = '#d8d8d8';
+      }
+      const text = document.createElement('div');
+      const title = document.createElement('p');
+      title.style.margin = '0';
+      title.style.fontWeight = '600';
+      title.textContent = label;
+      const subtitle = document.createElement('p');
+      subtitle.style.margin = '4px 0 0';
+      subtitle.style.color = 'rgba(0,0,0,0.6)';
+      subtitle.textContent = `${person.name || 'Unnamed'} • ${person.faceCount} face${person.faceCount === 1 ? '' : 's'}`;
+      text.append(title, subtitle);
+      wrapper.append(img, text);
+      return wrapper;
+    }
+
+    function createMergeActions(merge) {
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      const viewSource = document.createElement('button');
+      viewSource.type = 'button';
+      viewSource.className = 'secondary';
+      viewSource.textContent = 'View source';
+      viewSource.addEventListener('click', () => openDrawer(
+        merge.source.id,
+        merge.source.name || 'Person',
+        merge.source.faceCount
+      ));
+
+      const viewTarget = document.createElement('button');
+      viewTarget.type = 'button';
+      viewTarget.className = 'secondary';
+      viewTarget.textContent = 'View target';
+      viewTarget.addEventListener('click', () => openDrawer(
+        merge.target.id,
+        merge.target.name || 'Person',
+        merge.target.faceCount
+      ));
+
+      const undoButton = document.createElement('button');
+      undoButton.type = 'button';
+      undoButton.textContent = 'Undo merge';
+      undoButton.addEventListener('click', () => undoAutoMerge(merge.source.id));
+
+      actions.append(viewSource, viewTarget, undoButton);
+      return actions;
     }
 
     async function openDrawer(id, label, faceCount) {
@@ -776,6 +1010,17 @@ private enum FaceWebAssets {
         img.alt = 'Face preview';
         content.appendChild(img);
       });
+    }
+
+    async function undoAutoMerge(personID) {
+      try {
+        const response = await fetch(`/api/auto-merges/${personID}/undo`, { method: 'POST' });
+        if (!response.ok) throw new Error('Failed to undo merge');
+        await refreshData();
+      } catch (error) {
+        console.error(error);
+        alert('Unable to undo merge. Check the console for details.');
+      }
     }
     """
 }

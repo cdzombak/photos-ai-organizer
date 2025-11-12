@@ -24,7 +24,7 @@ Sources/Core/Models/facenet_vggface2.mlpackage
 2. If you have a `.mlmodel` file, convert it to an `.mlpackage` (compiled) format first
 3. Place it in the location above
 
-Once the model is in place, the CLI will automatically load it and generate real FaceNet embeddings during `process-faces` runs.
+Once the model is in place, the CLI will automatically load it and generate real FaceNet embeddings during `detect-faces` runs.
 
 ## Running Face Recognition
 
@@ -33,20 +33,18 @@ Once the model is in place, the CLI will automatically load it and generate real
 Process all photos to detect faces and generate embeddings:
 
 ```bash
-photos-ai-organizer process-faces --config photos-config.yml
+photos-ai-organizer detect-faces --config photos-config.yml
 ```
 
 **Options:**
 - `--config <file>` / `--config-path <file>`: Path to configuration file (default: photos-config.yml)
 - `--max-photos <number>`: Limit number of photos to process
 - `--after-date <date>`: Only process photos after this date (ISO 8601 format)
-- `--no-clustering`: Skip clustering step (default: runs clustering)
-- `--force-reprocess`: Reprocess already processed photos
 - `--concurrency <number>`: Limit how many photos are processed simultaneously (default: number of CPU cores)
 
 **Example with options:**
 ```bash
-photos-ai-organizer process-faces \
+photos-ai-organizer detect-faces \
   --config photos-config.yml \
   --max-photos 1000 \
   --after-date 2023-01-01T00:00:00Z
@@ -70,7 +68,13 @@ Use the optional `--port` flag to host on a different port if 8081 is busy.
 
 ### Step 2: Face Clustering
 
-Face clustering runs automatically after face detection by default. It groups similar faces into person clusters using the following process:
+Run clustering once detections exist:
+
+```bash
+photos-ai-organizer cluster-faces --config photos-config.yml
+```
+
+The clustering pass groups similar faces into person clusters using the following process:
 
 1. **Fetch Unmatched Faces**: Gets all face detections without person assignments
 2. **Compute Similarities**: Compares face embeddings using cosine similarity

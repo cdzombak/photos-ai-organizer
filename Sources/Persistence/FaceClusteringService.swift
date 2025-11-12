@@ -78,7 +78,9 @@ public struct FaceClusteringService {
             }
 
             if !personsTouchedThisBatch.isEmpty {
+                print("   🔄 Recomputing centroids for \(personsTouchedThisBatch.count) persons...")
                 try recomputeCentroids(for: personsTouchedThisBatch, centroids: &centroids, connection: connection)
+                print("   ✅ Centroids recomputed")
             }
         }
         
@@ -89,7 +91,7 @@ public struct FaceClusteringService {
     private func loadPersonCentroids(for persons: [Person], connection: Connection) throws -> [UUID: PersonCentroid] {
         var map: [UUID: PersonCentroid] = [:]
         for person in persons {
-            let faces = try faceStore.getFacesForPerson(person.id, connection: connection)
+            let faces = try faceStore.getFacesForPerson(person.id, includeMergedDescendants: true, connection: connection)
             let embeddings = faces.compactMap { $0.faceEmbedding }
             guard let centroid = makeCentroid(from: embeddings) else { continue }
             map[person.id] = centroid
@@ -116,7 +118,7 @@ public struct FaceClusteringService {
         connection: Connection
     ) throws {
         for personID in personIDs {
-            let faces = try faceStore.getFacesForPerson(personID, connection: connection)
+            let faces = try faceStore.getFacesForPerson(personID, includeMergedDescendants: true, connection: connection)
             let embeddings = faces.compactMap { $0.faceEmbedding }
             if let centroid = makeCentroid(from: embeddings) {
                 centroids[personID] = centroid
@@ -159,7 +161,11 @@ public struct FaceClusteringService {
             
             // Find best matching person
             for person in existingPersons {
-                let personFaces = try faceStore.getFacesForPerson(person.id, connection: connection)
+                let personFaces = try faceStore.getFacesForPerson(
+                    person.id,
+                    includeMergedDescendants: true,
+                    connection: connection
+                )
                 
                 // Calculate average similarity with all faces of this person
                 var totalSimilarity: Float = 0.0
@@ -208,10 +214,15 @@ public struct FaceClusteringService {
     public func findPotentialDuplicates(connection: Connection) async throws -> [(person1: Person, person2: Person, similarity: Float)] {
         let allPersons = try faceStore.getAllActivePersons(connection: connection)
         var potentialDuplicates: [(Person, Person, Float)] = []
-        
+        let totalComparisons = (allPersons.count * (allPersons.count - 1)) / 2
+        let reporter = ProgressReporter(total: totalComparisons, label: "Comparing persons for duplicates", interval: max(1, totalComparisons / 100))
+        var comparisonsDone = 0
+
         // Compare each person with every other person
         for i in 0..<allPersons.count {
             for j in (i+1)..<allPersons.count {
+                comparisonsDone += 1
+                reporter.advance(to: comparisonsDone)
                 let person1 = allPersons[i]
                 let person2 = allPersons[j]
                 
@@ -223,35 +234,104 @@ public struct FaceClusteringService {
                 }
             }
         }
-        
+
+        reporter.finish()
+
         // Sort by similarity (highest first)
         potentialDuplicates.sort(by: { $0.2 > $1.2 })
-        
+
         return potentialDuplicates
     }
+
+    public func mergeDuplicatePersonsAutomatically(connection: Connection) async throws -> Int {
+        let mergeThreshold = min(1.0, similarityThreshold * 1.2)
+        print("   🔍 Searching for duplicate persons to merge...")
+        let candidates = try await findPotentialDuplicates(connection: connection)
+        print("   📋 Found \(candidates.count) potential duplicate pairs")
+        guard !candidates.isEmpty else { return 0 }
+
+        var mergedSources: Set<UUID> = []
+        var mergeCount = 0
+
+        for (person1, person2, similarity) in candidates {
+            guard similarity >= mergeThreshold else { continue }
+            if mergedSources.contains(person1.id) || mergedSources.contains(person2.id) {
+                continue
+            }
+
+            // Keep the older person (or person1 if tied) as the target for stability
+            let target: Person
+            let source: Person
+            if person1.createdAt <= person2.createdAt {
+                target = person1
+                source = person2
+            } else {
+                target = person2
+                source = person1
+            }
+
+            try await mergePersons(
+                source.id,
+                target.id,
+                connection: connection,
+                markAuto: true,
+                reassignFaces: false
+            )
+            mergedSources.insert(source.id)
+            mergeCount += 1
+        }
+
+        return mergeCount
+    }
+
+    public func undoAutoMerge(_ sourcePersonID: UUID, connection: Connection) throws {
+        guard let sourcePerson = try faceStore.getPerson(sourcePersonID, connection: connection) else {
+            throw ClusteringError.personNotFound
+        }
+        guard sourcePerson.mergedByAuto, sourcePerson.mergedInto != nil else {
+            throw ClusteringError.mergeNotAutomatic
+        }
+
+        let restored = sourcePerson
+            .withMergedInto(nil)
+            .withIsActive(true)
+            .withMergedByAuto(false)
+        try faceStore.savePerson(restored, connection: connection)
+    }
     
-    public func mergePersons(_ sourcePersonID: UUID, _ targetPersonID: UUID, connection: Connection) async throws {
+    public func mergePersons(
+        _ sourcePersonID: UUID,
+        _ targetPersonID: UUID,
+        connection: Connection,
+        markAuto: Bool = false,
+        reassignFaces: Bool = true
+    ) async throws {
         // Verify both persons exist
         guard let sourcePerson = try faceStore.getPerson(sourcePersonID, connection: connection),
-              let targetPerson = try faceStore.getPerson(targetPersonID, connection: connection) else {
+              let _ = try faceStore.getPerson(targetPersonID, connection: connection) else {
             throw ClusteringError.personNotFound
         }
         
-        // Get all faces from source person
-        let sourceFaces = try faceStore.getFacesForPerson(sourcePersonID, connection: connection)
-        
-        // Reassign all faces to target person
-        for face in sourceFaces {
-            try faceStore.assignFaceToPerson(face.id, personID: targetPersonID, connection: connection)
+        if reassignFaces {
+            // Get all faces from source person
+            let sourceFaces = try faceStore.getFacesForPerson(sourcePersonID, connection: connection)
+            
+            // Reassign all faces to target person
+            for face in sourceFaces {
+                try faceStore.assignFaceToPerson(face.id, personID: targetPersonID, connection: connection)
+            }
         }
         
         // Mark source person as merged
-        let mergedSourcePerson = sourcePerson.withMergedInto(targetPersonID).withIsActive(false)
+        let mergedSourcePerson = sourcePerson
+            .withMergedInto(targetPersonID)
+            .withIsActive(false)
+            .withMergedByAuto(markAuto)
         try faceStore.savePerson(mergedSourcePerson, connection: connection)
     }
     
     public func splitPerson(_ personID: UUID, faceIds: [UUID], connection: Connection) async throws {
-        guard let person = try faceStore.getPerson(personID, connection: connection) else {
+        guard try faceStore.getPerson(personID, connection: connection) != nil else {
             throw ClusteringError.personNotFound
         }
         
@@ -265,7 +345,11 @@ public struct FaceClusteringService {
     }
     
     public func computeClusterQuality(for personID: UUID, connection: Connection) async throws -> Float {
-        let faces = try faceStore.getFacesForPerson(personID, connection: connection)
+        let faces = try faceStore.getFacesForPerson(
+            personID,
+            includeMergedDescendants: true,
+            connection: connection
+        )
         guard faces.count >= 2 else { return 1.0 }
         
         var totalSimilarity: Float = 0.0
@@ -293,32 +377,32 @@ public struct FaceClusteringService {
     // MARK: - Helper Methods
     
     private func computePersonSimilarity(_ person1: Person, _ person2: Person, connection: Connection) async throws -> Float {
-        let faces1 = try faceStore.getFacesForPerson(person1.id, connection: connection)
-        let faces2 = try faceStore.getFacesForPerson(person2.id, connection: connection)
-        
+        let faces1 = try faceStore.getFacesForPerson(
+            person1.id,
+            includeMergedDescendants: true,
+            connection: connection
+        )
+        let faces2 = try faceStore.getFacesForPerson(
+            person2.id,
+            includeMergedDescendants: true,
+            connection: connection
+        )
+
         guard !faces1.isEmpty, !faces2.isEmpty else {
             return 0.0
         }
-        
-        var totalSimilarity: Float = 0.0
-        var comparisonCount = 0
-        
-        // Compare faces from person1 with faces from person2
-        for face1 in faces1 {
-            guard let embedding1 = face1.faceEmbedding else { continue }
-            
-            for face2 in faces2 {
-                guard let embedding2 = face2.faceEmbedding else { continue }
-                
-                let similarity = recognitionService.compareFaces(embedding1, embedding2)
-                totalSimilarity += similarity
-                comparisonCount += 1
-            }
+
+        // Compute centroids for both persons and compare those instead of all face pairs
+        // This changes complexity from O(m1 × m2) to O(m1 + m2) per person pair
+        let embeddings1 = faces1.compactMap { $0.faceEmbedding }
+        let embeddings2 = faces2.compactMap { $0.faceEmbedding }
+
+        guard let centroid1 = makeCentroid(from: embeddings1),
+              let centroid2 = makeCentroid(from: embeddings2) else {
+            return 0.0
         }
-        
-        guard comparisonCount > 0 else { return 0.0 }
-        
-        return totalSimilarity / Float(comparisonCount)
+
+        return recognitionService.compareFaces(centroid1.vector, centroid2.vector)
     }
 }
 
@@ -328,4 +412,5 @@ public enum ClusteringError: Error {
     case personNotFound
     case insufficientFaces
     case clusteringFailed
+    case mergeNotAutomatic
 }

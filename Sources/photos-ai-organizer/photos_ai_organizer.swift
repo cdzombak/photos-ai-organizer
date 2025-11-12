@@ -28,7 +28,13 @@ enum CLICommand: String {
 }
 
 private enum FacePipelineSupport {
-    static let commandName = FacePipelineCommand.configuration.commandName ?? "process-faces"
+    static let detectCommandName = DetectFacesCommand.configuration.commandName ?? "detect-faces"
+    static let clusterCommandName = ClusterFacesCommand.configuration.commandName ?? "cluster-faces"
+    static let commandNames = [detectCommandName, clusterCommandName]
+
+    static func isFaceCommand(_ name: String) -> Bool {
+        commandNames.contains(name)
+    }
 }
 
 struct CLIOptions {
@@ -123,7 +129,7 @@ struct CLIOptions {
                 if command == nil, let parsed = CLICommand(rawValue: argument) {
                     command = parsed
                 } else if command == nil {
-                    throw ExportError.invalidArgument("Unknown subcommand '\(argument)'. Try 'import', 'run-travel-pipeline', 'sync-travel-albums', '\(FacePipelineSupport.commandName)', or 'help'.")
+                    throw ExportError.invalidArgument("Unknown subcommand '\(argument)'. Try 'import', 'run-travel-pipeline', 'sync-travel-albums', '\(FacePipelineSupport.detectCommandName)', '\(FacePipelineSupport.clusterCommandName)', or 'help'.")
                 } else {
                     throw ExportError.invalidArgument("Unexpected argument '\(argument)'.")
                 }
@@ -168,43 +174,6 @@ enum PhotoLibraryAuthorizer {
         default:
             throw ExportError.authorizationDenied(status)
         }
-    }
-}
-
-final class ProgressReporter: @unchecked Sendable {
-    private let total: Int
-    private let label: String
-    private let interval: Int
-    private var lastReportedValue = 0
-
-    init(total: Int, label: String, interval: Int = 100) {
-        self.total = max(total, 1)
-        self.label = label
-        self.interval = max(1, interval)
-        emit(message: "\(label): 0/\(total)")
-    }
-
-    func advance(to value: Int) {
-        emitIfNeeded(currentValue: value)
-    }
-
-    func finish() {
-        emitIfNeeded(currentValue: total, force: true)
-    }
-
-    private func emitIfNeeded(currentValue: Int, force: Bool = false) {
-        guard currentValue >= 0 else { return }
-        if force || currentValue == total || currentValue - lastReportedValue >= interval {
-            lastReportedValue = currentValue
-            let percent = min(100.0, (Double(currentValue) / Double(total)) * 100.0)
-            let formatted = String(format: "%@: %d/%d (%.1f%%)", label, currentValue, total, percent)
-            emit(message: formatted)
-        }
-    }
-
-    private func emit(message: String) {
-        guard let data = "[photos-ai-organizer] \(message)\n".data(using: .utf8) else { return }
-        FileHandle.standardError.write(data)
     }
 }
 
@@ -721,9 +690,10 @@ struct PhotosMetadataExporterCLI {
 
 private extension PhotosMetadataExporterCLI {
     static func maybeRunFacePipeline(arguments: [String]) async throws -> Bool {
-        guard let index = arguments.firstIndex(of: FacePipelineSupport.commandName) else {
+        guard let index = arguments.firstIndex(where: { FacePipelineSupport.isFaceCommand($0) }) else {
             return false
         }
+        let commandName = arguments[index]
         var forwarded: [String] = []
 
         // Capture global config options that appear before the subcommand
@@ -734,19 +704,23 @@ private extension PhotosMetadataExporterCLI {
             case "--config", "--config-path", "-c":
                 let valueIndex = arguments.index(after: cursor)
                 guard valueIndex < index else {
-                    throw ExportError.invalidArgument("\(arg) requires a value before '\(FacePipelineSupport.commandName)'")
+                    throw ExportError.invalidArgument("\(arg) requires a value before '\(commandName)'")
                 }
                 forwarded.append("--config")
                 forwarded.append(arguments[valueIndex])
                 cursor = valueIndex
             default:
-                throw ExportError.invalidArgument("Option \(arg) must appear after '\(FacePipelineSupport.commandName)' when using that subcommand")
+                throw ExportError.invalidArgument("Option \(arg) must appear after '\(commandName)' when using that subcommand")
+            }
+            cursor = arguments.index(after: cursor)
         }
-        cursor = arguments.index(after: cursor)
-    }
 
         forwarded.append(contentsOf: arguments[arguments.index(after: index)..<arguments.endIndex])
-        await FacePipelineCommand.main(forwarded)
+        if commandName == FacePipelineSupport.detectCommandName {
+            await DetectFacesCommand.main(forwarded)
+        } else {
+            await ClusterFacesCommand.main(forwarded)
+        }
         return true
     }
 }
@@ -767,7 +741,8 @@ SUBCOMMANDS:
   grade                Send Photos to an AI model for 0–10 quality grading. (--concurrency N)
   serve-grades         Run a simple web server previewing graded photos.
   serve-faces          Review detected persons and clusters in a browser.
-  \(FacePipelineSupport.commandName)        Detect faces in photos and cluster them into persons.
+  \(FacePipelineSupport.detectCommandName)        Detect faces in Photos and store embeddings.
+  \(FacePipelineSupport.clusterCommandName)       Cluster stored embeddings into persons.
   help                 Show this message.
 
 OPTIONS:
@@ -783,7 +758,7 @@ EXAMPLES:
   photos-ai-organizer sync-travel-albums --config travel.yml
   photos-ai-organizer run-thematic-pipeline --config photos-config.yml
   photos-ai-organizer sync-thematic-albums --config photos-config.yml
-  photos-ai-organizer \(FacePipelineSupport.commandName) --config photos-config.yml
+  photos-ai-organizer \(FacePipelineSupport.detectCommandName) --config photos-config.yml
   photos-ai-organizer serve-faces --config photos-config.yml --port 8090
 """
     print(text)
