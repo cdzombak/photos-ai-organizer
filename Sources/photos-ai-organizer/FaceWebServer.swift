@@ -1068,8 +1068,8 @@ private enum FaceWebAssets {
     }
     .face-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-      gap: 12px;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 16px;
       overflow-y: auto;
       flex: 1;
     }
@@ -1079,7 +1079,8 @@ private enum FaceWebAssets {
       overflow: hidden;
       transition: transform 0.15s, box-shadow 0.15s;
       width: 100%;
-      aspect-ratio: 1;
+      aspect-ratio: 1 / 1;
+      min-height: 160px;
     }
     .face-thumbnail-wrapper:hover {
       transform: scale(1.02);
