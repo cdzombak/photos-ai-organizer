@@ -842,14 +842,22 @@ private enum FaceWebAssets {
 
     function renderPersons() {
       const grid = document.getElementById('persons-grid');
+      const empty = document.getElementById('persons-empty');
       grid.innerHTML = '';
+      empty.style.display = 'none';
       if (state.persons.length === 0) {
-        document.getElementById('persons-empty').style.display = 'block';
+        empty.textContent = 'No persons available.';
+        empty.style.display = 'block';
         return;
       }
-      document.getElementById('persons-empty').style.display = 'none';
       const sorted = sortPersons([...state.persons]);
-      sorted.forEach((person) => {
+      const filtered = sorted.filter((person) => (person.faceCount ?? 0) > 1);
+      if (filtered.length === 0) {
+        empty.textContent = 'No multi-face persons available.';
+        empty.style.display = 'block';
+        return;
+      }
+      filtered.forEach((person) => {
         grid.appendChild(createCard({
           title: person.name || 'Unnamed person',
           subtitle: `${person.faceCount} face${person.faceCount === 1 ? '' : 's'}`,
