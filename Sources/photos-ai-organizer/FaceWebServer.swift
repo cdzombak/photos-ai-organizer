@@ -1079,6 +1079,7 @@ private enum FaceWebAssets {
       overflow: hidden;
       transition: transform 0.15s, box-shadow 0.15s;
       width: 100%;
+      aspect-ratio: 1;
     }
     .face-thumbnail-wrapper:hover {
       transform: scale(1.02);
@@ -1094,6 +1095,13 @@ private enum FaceWebAssets {
       right: 6px;
       font-size: 1.2rem;
       filter: drop-shadow(0 0 4px rgba(0,0,0,0.5));
+    }
+    .face-thumbnail-wrapper img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #f0f0f0;
+      display: block;
     }
     .face-grid img {
       width: 100%;
