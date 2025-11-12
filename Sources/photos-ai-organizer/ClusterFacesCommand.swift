@@ -53,12 +53,24 @@ struct ClusterFacesCommand: AsyncParsableCommand {
         if !flaggedPersons.isEmpty {
             print("🔧 Processing \(flaggedPersons.count) persons flagged for reprocessing...")
             for person in flaggedPersons {
-                // Get all faces for this person
-                let faces = try faceStore.getFacesForPerson(person.id, includeMergedDescendants: false, connection: connection)
+                // Get all persons that are merged into this person
+                let mergedDescendants = try getMergedDescendants(of: person.id, connection: connection)
+
+                // Get all faces including from merged descendants
+                let faces = try faceStore.getFacesForPerson(person.id, includeMergedDescendants: true, connection: connection)
 
                 // Unassign all faces and mark them for high-threshold clustering
                 for face in faces {
                     try faceStore.unassignFaceFromPerson(face.id, useHighThreshold: true, connection: connection)
+                }
+
+                // Un-merge and deactivate all merged descendants
+                for descendant in mergedDescendants {
+                    let updated = descendant
+                        .withMergedInto(nil)
+                        .withNeedsReprocessing(false)
+                        .withIsActive(false)
+                    try faceStore.savePerson(updated, connection: connection)
                 }
 
                 // Clear the flag and deactivate the person
@@ -67,7 +79,8 @@ struct ClusterFacesCommand: AsyncParsableCommand {
                     .withIsActive(false)
                 try faceStore.savePerson(updated, connection: connection)
 
-                print("   ✅ Unassigned \(faces.count) faces from \(person.name ?? "Unnamed person")")
+                let totalPersons = mergedDescendants.count + 1
+                print("   ✅ Unassigned \(faces.count) faces from \(totalPersons) person(s) (\(person.name ?? "Unnamed"))")
             }
         }
 
@@ -128,5 +141,66 @@ struct ClusterFacesCommand: AsyncParsableCommand {
         } catch {
             print("   ⚠️  Could not compute cluster quality statistics: \(error)")
         }
+    }
+
+    private func getMergedDescendants(of personID: UUID, connection: Connection) throws -> [Person] {
+        // Use recursive CTE to find all persons merged into this person (and their descendants)
+        let sql = """
+        WITH RECURSIVE merged_tree AS (
+            SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored
+            FROM persons
+            WHERE merged_into = $1
+            UNION ALL
+            SELECT p.id, p.name, p.created_at, p.updated_at, p.merged_into, p.is_active, p.cluster_quality, p.merged_by_auto, p.favorite_face_id, p.needs_reprocessing, p.is_ignored
+            FROM persons p
+            INNER JOIN merged_tree mt ON p.merged_into = mt.id
+        )
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored
+        FROM merged_tree;
+        """
+
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute(parameterValues: [personID.uuidString])
+        defer { cursor.close() }
+
+        var persons: [Person] = []
+        for row in cursor {
+            let resolved = try row.get()
+            guard let idString = try resolved.columns[0].optionalString(),
+                  let id = UUID(uuidString: idString),
+                  let createdAt = try resolved.columns[2].optionalTimestampWithTimeZone()?.date,
+                  let updatedAt = try resolved.columns[3].optionalTimestampWithTimeZone()?.date,
+                  let isActive = try resolved.columns[5].optionalBool() else {
+                continue
+            }
+
+            let name = try resolved.columns[1].optionalString()
+            let mergedIntoString = try resolved.columns[4].optionalString()
+            let mergedInto = mergedIntoString != nil ? UUID(uuidString: mergedIntoString!) : nil
+            let clusterQuality = try resolved.columns[6].optionalDouble().map(Float.init)
+            let mergedByAuto = try resolved.columns[7].optionalBool() ?? false
+            let favoriteFaceIDString = try resolved.columns[8].optionalString()
+            let favoriteFaceID = favoriteFaceIDString != nil ? UUID(uuidString: favoriteFaceIDString!) : nil
+            let needsReprocessing = try resolved.columns[9].optionalBool() ?? false
+            let isIgnored = try resolved.columns[10].optionalBool() ?? false
+
+            persons.append(Person(
+                id: id,
+                name: name,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                mergedInto: mergedInto,
+                isActive: isActive,
+                clusterQuality: clusterQuality,
+                mergedByAuto: mergedByAuto,
+                favoriteFaceID: favoriteFaceID,
+                needsReprocessing: needsReprocessing,
+                isIgnored: isIgnored
+            ))
+        }
+
+        return persons
     }
 }
