@@ -215,6 +215,12 @@ public struct FaceClusteringService {
         let allPersons = try faceStore.getAllActivePersons(connection: connection)
         var potentialDuplicates: [(Person, Person, Float)] = []
         let totalComparisons = (allPersons.count * (allPersons.count - 1)) / 2
+
+        // Precompute centroids once for all persons to avoid redundant DB queries and calculations
+        print("   📊 Precomputing centroids for \(allPersons.count) persons...")
+        let centroids = try loadPersonCentroids(for: allPersons, connection: connection)
+        print("   ✅ Centroids computed")
+
         let reporter = ProgressReporter(total: totalComparisons, label: "Comparing persons for duplicates", interval: max(1, totalComparisons / 100))
         var comparisonsDone = 0
 
@@ -225,8 +231,13 @@ public struct FaceClusteringService {
                 reporter.advance(to: comparisonsDone)
                 let person1 = allPersons[i]
                 let person2 = allPersons[j]
-                
-                let similarity = try await computePersonSimilarity(person1, person2, connection: connection)
+
+                // Compare using precomputed centroids
+                guard let centroid1 = centroids[person1.id],
+                      let centroid2 = centroids[person2.id] else {
+                    continue
+                }
+                let similarity = recognitionService.compareFaces(centroid1.vector, centroid2.vector)
                 
                 // If similarity is high but they're different persons, they might be duplicates
                 if similarity >= similarityThreshold {
