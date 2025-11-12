@@ -144,16 +144,19 @@ struct ClusterFacesCommand: AsyncParsableCommand {
     }
 
     private func getMergedDescendants(of personID: UUID, connection: Connection) throws -> [Person] {
-        // Use recursive CTE to find all persons merged into this person (and their descendants)
+        // Use recursive CTE with cycle detection to find all persons merged into this person
         let sql = """
         WITH RECURSIVE merged_tree AS (
-            SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored
+            SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored,
+                   ARRAY[id] as path
             FROM persons
             WHERE merged_into = $1
             UNION ALL
-            SELECT p.id, p.name, p.created_at, p.updated_at, p.merged_into, p.is_active, p.cluster_quality, p.merged_by_auto, p.favorite_face_id, p.needs_reprocessing, p.is_ignored
+            SELECT p.id, p.name, p.created_at, p.updated_at, p.merged_into, p.is_active, p.cluster_quality, p.merged_by_auto, p.favorite_face_id, p.needs_reprocessing, p.is_ignored,
+                   mt.path || p.id
             FROM persons p
             INNER JOIN merged_tree mt ON p.merged_into = mt.id
+            WHERE NOT p.id = ANY(mt.path)
         )
         SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored
         FROM merged_tree;
