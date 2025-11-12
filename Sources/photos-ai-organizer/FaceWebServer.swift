@@ -168,6 +168,46 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
                 }
                 try dataProvider.updatePersonName(personID: personID, name: json.name)
                 return respond(status: .noContent, context: context)
+            } else if pathComponents.count == 4,
+                      pathComponents[0] == "api",
+                      pathComponents[1] == "persons",
+                      pathComponents[3] == "merge",
+                      let sourceID = UUID(uuidString: String(pathComponents[2])) {
+                guard var body = body,
+                      let bytes = body.readBytes(length: body.readableBytes) else {
+                    return respond(status: .badRequest, context: context)
+                }
+                let data = Data(bytes)
+                guard let json = try? JSONDecoder().decode(MergePersonRequest.self, from: data) else {
+                    return respond(status: .badRequest, context: context)
+                }
+                let eventLoop = context.eventLoop
+                let promise = eventLoop.makePromise(of: Void.self)
+                promise.futureResult.whenComplete { result in
+                    switch result {
+                    case .success:
+                        self.respond(status: .noContent, context: context)
+                    case .failure(let error):
+                        print("FaceHTTPHandler error: \(error)")
+                        self.respond(status: .internalServerError, context: context)
+                    }
+                }
+                Task {
+                    do {
+                        try await dataProvider.mergePersons(sourceID: sourceID, targetID: json.targetID)
+                        promise.succeed(())
+                    } catch {
+                        promise.fail(error)
+                    }
+                }
+                return
+            } else if pathComponents.count == 4,
+                      pathComponents[0] == "api",
+                      pathComponents[1] == "persons",
+                      pathComponents[3] == "undo-merge",
+                      let sourceID = UUID(uuidString: String(pathComponents[2])) {
+                try dataProvider.undoManualMerge(sourceID: sourceID)
+                return respond(status: .noContent, context: context)
             } else {
                 return respond(status: .notFound, context: context)
             }
@@ -352,10 +392,43 @@ private final class FaceDataProvider: @unchecked Sendable {
         }
     }
 
+    func mergePersons(sourceID: UUID, targetID: UUID) async throws {
+        try await withConnection { connection in
+            let service = FaceClusteringService(
+                faceStore: faceStore,
+                recognitionService: FaceRecognitionService(),
+                similarityThreshold: similarityThreshold
+            )
+            try await service.mergePersons(sourceID, targetID, connection: connection)
+        }
+    }
+
+    func undoManualMerge(sourceID: UUID) throws {
+        try withConnection { connection in
+            guard let sourcePerson = try faceStore.getPerson(sourceID, connection: connection) else {
+                throw FaceDataError.personNotFound
+            }
+            guard sourcePerson.mergedInto != nil, sourcePerson.isActive == false else {
+                throw FaceDataError.invalidRequest
+            }
+            // Restore the source person
+            let restored = sourcePerson
+                .withMergedInto(nil)
+                .withIsActive(true)
+            try faceStore.savePerson(restored, connection: connection)
+        }
+    }
+
     private func withConnection<T>(_ body: (Connection) throws -> T) throws -> T {
         let connection = try Connection(configuration: config.makeConnectionConfiguration())
         defer { connection.close() }
         return try body(connection)
+    }
+
+    private func withConnection<T>(_ body: (Connection) async throws -> T) async throws -> T {
+        let connection = try Connection(configuration: config.makeConnectionConfiguration())
+        defer { connection.close() }
+        return try await body(connection)
     }
 
     private func makeSummary(
@@ -510,6 +583,10 @@ private final class FaceThumbnailProvider: @unchecked Sendable {
 
 private struct UpdateNameRequest: Codable {
     let name: String?
+}
+
+private struct MergePersonRequest: Codable {
+    let targetID: UUID
 }
 
 private struct FacePersonSummary: Codable {
@@ -728,6 +805,7 @@ private enum FaceWebAssets {
       display: flex;
       flex-direction: column;
       gap: 12px;
+      position: relative;
     }
     .card img {
       width: 100%;
@@ -773,11 +851,56 @@ private enum FaceWebAssets {
       font-style: italic;
       white-space: nowrap;
     }
+    .card-autocomplete {
+      position: absolute;
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      max-height: 200px;
+      overflow-y: auto;
+      z-index: 1000;
+      min-width: 200px;
+    }
+    .autocomplete-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .autocomplete-item:hover,
+    .autocomplete-item.selected {
+      background: rgba(0,87,255,0.1);
+    }
+    .autocomplete-item .name {
+      flex: 1;
+      font-weight: 500;
+    }
+    .autocomplete-item .count {
+      font-size: 0.85rem;
+      color: rgba(0,0,0,0.5);
+      white-space: nowrap;
+    }
     .meta {
       font-size: 0.9rem;
       color: rgba(0,0,0,0.6);
       display: flex;
       justify-content: space-between;
+    }
+    .card .undo-merge-btn {
+      padding: 6px 12px;
+      font-size: 0.85rem;
+      background: #ff9500;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .card .undo-merge-btn:hover {
+      background: #e08600;
     }
     .card button.view-btn {
       border: none;
@@ -1251,24 +1374,121 @@ private enum FaceWebAssets {
       input.focus();
       input.select();
 
-      const handleSave = async () => {
-        await saveCardName(card, person);
+      let autocompleteDiv = null;
+      let selectedIndex = -1;
+      let filteredSuggestions = [];
+
+      const showAutocomplete = () => {
+        const query = input.value.trim().toLowerCase();
+        if (query.length === 0) {
+          hideAutocomplete();
+          return;
+        }
+
+        // Get all other named persons
+        const suggestions = state.persons
+          .filter((p) => p.id !== person.id && p.name && p.name.toLowerCase().includes(query))
+          .sort((a, b) => {
+            // Prioritize exact prefix matches
+            const aStarts = a.name.toLowerCase().startsWith(query);
+            const bStarts = b.name.toLowerCase().startsWith(query);
+            if (aStarts && !bStarts) return -1;
+            if (!aStarts && bStarts) return 1;
+            return a.name.localeCompare(b.name);
+          });
+
+        filteredSuggestions = suggestions;
+
+        if (suggestions.length === 0) {
+          hideAutocomplete();
+          return;
+        }
+
+        if (!autocompleteDiv) {
+          autocompleteDiv = document.createElement('div');
+          autocompleteDiv.className = 'card-autocomplete';
+          card.appendChild(autocompleteDiv);
+        }
+
+        autocompleteDiv.innerHTML = '';
+        selectedIndex = -1;
+
+        suggestions.forEach((suggestion, index) => {
+          const item = document.createElement('div');
+          item.className = 'autocomplete-item';
+          item.dataset.index = index;
+
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'name';
+          nameSpan.textContent = suggestion.name;
+
+          const countSpan = document.createElement('span');
+          countSpan.className = 'count';
+          countSpan.textContent = `${suggestion.faceCount} faces`;
+
+          item.append(nameSpan, countSpan);
+          item.addEventListener('click', () => selectSuggestion(suggestion));
+          autocompleteDiv.appendChild(item);
+        });
+
+        // Position autocomplete below input
+        const inputRect = input.getBoundingClientRect();
+        const cardRect = card.getBoundingClientRect();
+        autocompleteDiv.style.top = `${inputRect.bottom - cardRect.top + 4}px`;
+        autocompleteDiv.style.left = `${inputRect.left - cardRect.left}px`;
+        autocompleteDiv.style.width = `${inputRect.width}px`;
       };
 
-      const handleCancel = () => {
-        cancelCardEdit(card);
+      const hideAutocomplete = () => {
+        if (autocompleteDiv) {
+          autocompleteDiv.remove();
+          autocompleteDiv = null;
+        }
+        selectedIndex = -1;
+        filteredSuggestions = [];
+      };
+
+      const selectSuggestion = async (suggestion) => {
+        hideAutocomplete();
+        await mergeIntoTarget(card, person, suggestion);
+      };
+
+      const handleInput = () => {
+        showAutocomplete();
       };
 
       const handleKeyDown = (e) => {
-        if (e.key === 'Enter') {
+        if (e.key === 'ArrowDown') {
           e.preventDefault();
-          handleSave();
+          if (filteredSuggestions.length > 0) {
+            selectedIndex = Math.min(selectedIndex + 1, filteredSuggestions.length - 1);
+            updateSelection();
+          }
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (filteredSuggestions.length > 0) {
+            selectedIndex = Math.max(selectedIndex - 1, -1);
+            updateSelection();
+          }
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          if (selectedIndex >= 0 && selectedIndex < filteredSuggestions.length) {
+            selectSuggestion(filteredSuggestions[selectedIndex]);
+          } else {
+            hideAutocomplete();
+            saveCardName(card, person);
+          }
         } else if (e.key === 'Escape') {
           e.preventDefault();
-          handleCancel();
+          if (autocompleteDiv) {
+            hideAutocomplete();
+          } else {
+            cancelCardEdit(card);
+          }
         } else if (e.key === 'Tab') {
           e.preventDefault();
-          handleSave().then(() => {
+          hideAutocomplete();
+          saveCardName(card, person).then(() => {
             if (e.shiftKey) {
               focusPreviousCard(card);
             } else {
@@ -1278,8 +1498,32 @@ private enum FaceWebAssets {
         }
       };
 
-      input.addEventListener('keydown', handleKeyDown, { once: false });
-      input.addEventListener('blur', handleSave, { once: true });
+      const updateSelection = () => {
+        if (!autocompleteDiv) return;
+        const items = autocompleteDiv.querySelectorAll('.autocomplete-item');
+        items.forEach((item, index) => {
+          if (index === selectedIndex) {
+            item.classList.add('selected');
+            item.scrollIntoView({ block: 'nearest' });
+          } else {
+            item.classList.remove('selected');
+          }
+        });
+      };
+
+      const handleBlur = (e) => {
+        // Delay to allow click on autocomplete
+        setTimeout(() => {
+          if (!card.contains(document.activeElement)) {
+            hideAutocomplete();
+            saveCardName(card, person);
+          }
+        }, 200);
+      };
+
+      input.addEventListener('input', handleInput);
+      input.addEventListener('keydown', handleKeyDown);
+      input.addEventListener('blur', handleBlur);
     }
 
     async function saveCardName(card, person) {
@@ -1350,6 +1594,110 @@ private enum FaceWebAssets {
         if (person) {
           enterCardEditMode(prevCard, person);
         }
+      }
+    }
+
+    async function mergeIntoTarget(card, sourcePerson, targetPerson) {
+      const heading = card.querySelector('.card-title');
+      const input = card.querySelector('.card-name-input');
+      const saveStatus = card.querySelector('.card-save-status');
+
+      saveStatus.textContent = 'Merging...';
+      heading.classList.add('hidden');
+      input.classList.add('hidden');
+
+      try {
+        const response = await fetch(`/api/persons/${sourcePerson.id}/merge`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targetID: targetPerson.id })
+        });
+
+        if (!response.ok) throw new Error('Failed to merge');
+
+        saveStatus.textContent = `Merged into ${targetPerson.name}`;
+
+        // Replace the card content with undo option
+        const titleSection = card.querySelector('.card-title-section');
+        titleSection.innerHTML = '';
+
+        const mergedText = document.createElement('span');
+        mergedText.style.fontWeight = '500';
+        mergedText.style.fontSize = '0.95rem';
+        mergedText.style.color = 'rgba(0,0,0,0.7)';
+        mergedText.textContent = `Merged into "${targetPerson.name}"`;
+
+        const undoBtn = document.createElement('button');
+        undoBtn.className = 'undo-merge-btn';
+        undoBtn.textContent = 'Undo';
+        undoBtn.addEventListener('click', () => undoMerge(card, sourcePerson, targetPerson));
+
+        titleSection.append(mergedText, undoBtn);
+
+        // Update the view button to view target person
+        const viewBtn = card.querySelector('.view-btn');
+        if (viewBtn) {
+          viewBtn.textContent = 'View target';
+          viewBtn.onclick = () => openDrawer(targetPerson.id, targetPerson.name || 'Person', targetPerson.faceCount);
+        }
+
+      } catch (error) {
+        console.error(error);
+        saveStatus.textContent = 'Merge failed';
+        heading.classList.remove('hidden');
+        input.classList.remove('hidden');
+        setTimeout(() => { saveStatus.textContent = ''; }, 3000);
+      }
+    }
+
+    async function undoMerge(card, sourcePerson, targetPerson) {
+      const titleSection = card.querySelector('.card-title-section');
+      const saveStatus = card.querySelector('.card-save-status');
+
+      saveStatus.textContent = 'Undoing...';
+
+      try {
+        const response = await fetch(`/api/persons/${sourcePerson.id}/undo-merge`, {
+          method: 'POST'
+        });
+
+        if (!response.ok) throw new Error('Failed to undo merge');
+
+        // Restore the card to normal state
+        titleSection.innerHTML = '';
+
+        const heading = document.createElement('h3');
+        heading.className = 'card-title';
+        heading.textContent = sourcePerson.name || 'Unnamed person';
+        heading.addEventListener('click', () => enterCardEditMode(card, sourcePerson));
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'card-name-input hidden';
+        input.placeholder = 'Enter name';
+
+        const status = document.createElement('span');
+        status.className = 'card-save-status';
+        status.textContent = 'Merge undone';
+
+        titleSection.append(heading, input, status);
+
+        setTimeout(() => { status.textContent = ''; }, 2000);
+
+        // Restore view button
+        const viewBtn = card.querySelector('.view-btn');
+        if (viewBtn) {
+          viewBtn.textContent = 'View faces';
+          viewBtn.onclick = () => openDrawer(sourcePerson.id, sourcePerson.name || 'Person', sourcePerson.faceCount);
+        }
+
+        // Reload data to refresh counts
+        await refreshData();
+
+      } catch (error) {
+        console.error(error);
+        saveStatus.textContent = 'Undo failed';
+        setTimeout(() => { saveStatus.textContent = ''; }, 3000);
       }
     }
 
