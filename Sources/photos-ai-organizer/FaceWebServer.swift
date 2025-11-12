@@ -208,6 +208,21 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
                       let sourceID = UUID(uuidString: String(pathComponents[2])) {
                 try dataProvider.undoManualMerge(sourceID: sourceID)
                 return respond(status: .noContent, context: context)
+            } else if pathComponents.count == 4,
+                      pathComponents[0] == "api",
+                      pathComponents[1] == "persons",
+                      pathComponents[3] == "favorite-face",
+                      let personID = UUID(uuidString: String(pathComponents[2])) {
+                guard var body = body,
+                      let bytes = body.readBytes(length: body.readableBytes) else {
+                    return respond(status: .badRequest, context: context)
+                }
+                let data = Data(bytes)
+                guard let json = try? JSONDecoder().decode(SetFavoriteFaceRequest.self, from: data) else {
+                    return respond(status: .badRequest, context: context)
+                }
+                try dataProvider.setFavoriteFace(personID: personID, faceID: json.faceID)
+                return respond(status: .noContent, context: context)
             } else {
                 return respond(status: .notFound, context: context)
             }
@@ -314,15 +329,18 @@ private final class FaceDataProvider: @unchecked Sendable {
                     includeMergedDescendants: true,
                     connection: connection
                 )
+                // Use favorite face for thumbnail if set, otherwise use sample face
+                let thumbnailFaceID = person.favoriteFaceID ?? sampleFaceID
                 summaries.append(FacePersonSummary(
                     id: person.id,
                     name: person.name,
                     faceCount: faceCount,
                     createdAt: person.createdAt,
                     updatedAt: person.updatedAt,
-                    sampleFaceID: sampleFaceID,
-                    sampleImageURL: sampleFaceID.map { "/api/faces/\($0.uuidString)/thumbnail?size=160" },
-                    qualityScore: person.clusterQuality
+                    sampleFaceID: thumbnailFaceID,
+                    sampleImageURL: thumbnailFaceID.map { "/api/faces/\($0.uuidString)/thumbnail?size=160" },
+                    qualityScore: person.clusterQuality,
+                    favoriteFaceID: person.favoriteFaceID
                 ))
             }
             return summaries
@@ -426,6 +444,12 @@ private final class FaceDataProvider: @unchecked Sendable {
         }
     }
 
+    func setFavoriteFace(personID: UUID, faceID: UUID?) throws {
+        try withConnection { connection in
+            try faceStore.updateFavoriteFace(personID, faceID: faceID, connection: connection)
+        }
+    }
+
     private func withConnection<T>(_ body: (Connection) throws -> T) throws -> T {
         let connection = try Connection(configuration: config.makeConnectionConfiguration())
         defer { connection.close() }
@@ -453,15 +477,18 @@ private final class FaceDataProvider: @unchecked Sendable {
             includeMergedDescendants: includeMergedDescendants,
             connection: connection
         )
+        // Use favorite face for thumbnail if set, otherwise use sample face
+        let thumbnailFaceID = person.favoriteFaceID ?? sampleFaceID
         return FacePersonSummary(
             id: person.id,
             name: person.name,
             faceCount: faceCount,
             createdAt: person.createdAt,
             updatedAt: person.updatedAt,
-            sampleFaceID: sampleFaceID,
-            sampleImageURL: sampleFaceID.map { "/api/faces/\($0.uuidString)/thumbnail?size=160" },
-            qualityScore: person.clusterQuality
+            sampleFaceID: thumbnailFaceID,
+            sampleImageURL: thumbnailFaceID.map { "/api/faces/\($0.uuidString)/thumbnail?size=160" },
+            qualityScore: person.clusterQuality,
+            favoriteFaceID: person.favoriteFaceID
         )
     }
 }
@@ -596,6 +623,10 @@ private struct MergePersonRequest: Codable {
     let targetID: UUID
 }
 
+private struct SetFavoriteFaceRequest: Codable {
+    let faceID: UUID?
+}
+
 private struct FacePersonSummary: Codable {
     let id: UUID
     let name: String?
@@ -605,6 +636,7 @@ private struct FacePersonSummary: Codable {
     let sampleFaceID: UUID?
     let sampleImageURL: String?
     let qualityScore: Float?
+    let favoriteFaceID: UUID?
 }
 
 private struct AutoMergeSummary: Codable {
@@ -1041,12 +1073,34 @@ private enum FaceWebAssets {
       overflow-y: auto;
       flex: 1;
     }
+    .face-thumbnail-wrapper {
+      position: relative;
+      border-radius: 12px;
+      overflow: hidden;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .face-thumbnail-wrapper:hover {
+      transform: scale(1.02);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    .face-thumbnail-wrapper.favorite {
+      box-shadow: 0 0 0 3px #0057ff;
+    }
+    .face-thumbnail-wrapper.favorite::after {
+      content: '⭐';
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      font-size: 1.2rem;
+      filter: drop-shadow(0 0 4px rgba(0,0,0,0.5));
+    }
     .face-grid img {
       width: 100%;
       border-radius: 12px;
       min-height: 160px;
       object-fit: cover;
       background: #f0f0f0;
+      display: block;
     }
     @media (max-width: 768px) {
       header {
@@ -1069,6 +1123,7 @@ private enum FaceWebAssets {
       currentPersonID: null,
       currentPersonName: null,
       isEditingName: false,
+      currentFavoriteFaceID: null,
     };
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -1793,6 +1848,10 @@ private enum FaceWebAssets {
       content.innerHTML = '';
       empty.style.display = 'none';
 
+      // Get current person's favorite face ID
+      const person = state.persons.find((p) => p.id === id);
+      state.currentFavoriteFaceID = person?.favoriteFaceID || null;
+
       const cacheKey = `person:${id}`;
       if (state.facesCache.has(cacheKey)) {
         renderFaces(state.facesCache.get(cacheKey));
@@ -1822,12 +1881,56 @@ private enum FaceWebAssets {
       }
       empty.style.display = 'none';
       faces.forEach((face) => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'face-thumbnail-wrapper';
+        if (face.id === state.currentFavoriteFaceID) {
+          wrapper.classList.add('favorite');
+        }
+
         const img = document.createElement('img');
         img.loading = 'lazy';
         img.src = face.imageURL;
         img.alt = 'Face preview';
-        content.appendChild(img);
+        img.style.cursor = 'pointer';
+        img.title = 'Click to set as favorite thumbnail';
+
+        wrapper.addEventListener('click', async () => {
+          await setFavoriteFace(state.currentPersonID, face.id);
+        });
+
+        wrapper.appendChild(img);
+        content.appendChild(wrapper);
       });
+    }
+
+    async function setFavoriteFace(personID, faceID) {
+      try {
+        const response = await fetch(`/api/persons/${personID}/favorite-face`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ faceID })
+        });
+        if (!response.ok) throw new Error('Failed to set favorite face');
+
+        // Update state
+        state.currentFavoriteFaceID = faceID;
+        const person = state.persons.find((p) => p.id === personID);
+        if (person) {
+          person.favoriteFaceID = faceID;
+        }
+
+        // Re-render faces to show new favorite
+        const cacheKey = `person:${personID}`;
+        if (state.facesCache.has(cacheKey)) {
+          renderFaces(state.facesCache.get(cacheKey));
+        }
+
+        // Refresh main grid to update thumbnail
+        await refreshData();
+      } catch (error) {
+        console.error(error);
+        alert('Unable to set favorite face. Check the console for details.');
+      }
     }
 
     async function undoAutoMerge(personID) {

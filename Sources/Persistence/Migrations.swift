@@ -80,6 +80,16 @@ public extension MigrationStep {
             """
         ]
     )
+
+    static let addFavoriteFaceColumn = MigrationStep(
+        identifier: "004_add_favorite_face",
+        statements: [
+            """
+            ALTER TABLE persons
+            ADD COLUMN IF NOT EXISTS favorite_face_id UUID REFERENCES face_detections(id);
+            """
+        ]
+    )
 }
 
 protocol SQLCommandExecutor {

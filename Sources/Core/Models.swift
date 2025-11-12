@@ -283,6 +283,7 @@ public struct Person {
     public var isActive: Bool
     public var clusterQuality: Float?
     public var mergedByAuto: Bool
+    public var favoriteFaceID: UUID?
 
     public init(
         id: UUID = UUID(),
@@ -292,7 +293,8 @@ public struct Person {
         mergedInto: UUID? = nil,
         isActive: Bool = true,
         clusterQuality: Float? = nil,
-        mergedByAuto: Bool = false
+        mergedByAuto: Bool = false,
+        favoriteFaceID: UUID? = nil
     ) {
         self.id = id
         self.name = name
@@ -302,6 +304,7 @@ public struct Person {
         self.isActive = isActive
         self.clusterQuality = clusterQuality
         self.mergedByAuto = mergedByAuto
+        self.favoriteFaceID = favoriteFaceID
     }
 
     public func withName(_ name: String?) -> Person {
@@ -313,7 +316,8 @@ public struct Person {
             mergedInto: mergedInto,
             isActive: isActive,
             clusterQuality: clusterQuality,
-            mergedByAuto: mergedByAuto
+            mergedByAuto: mergedByAuto,
+            favoriteFaceID: favoriteFaceID
         )
     }
 
@@ -326,7 +330,8 @@ public struct Person {
             mergedInto: mergedInto,
             isActive: isActive,
             clusterQuality: clusterQuality,
-            mergedByAuto: mergedByAuto
+            mergedByAuto: mergedByAuto,
+            favoriteFaceID: favoriteFaceID
         )
     }
 
@@ -339,7 +344,8 @@ public struct Person {
             mergedInto: mergedInto,
             isActive: isActive,
             clusterQuality: clusterQuality,
-            mergedByAuto: mergedByAuto
+            mergedByAuto: mergedByAuto,
+            favoriteFaceID: favoriteFaceID
         )
     }
 
@@ -352,7 +358,22 @@ public struct Person {
             mergedInto: mergedInto,
             isActive: isActive,
             clusterQuality: clusterQuality,
-            mergedByAuto: mergedByAuto
+            mergedByAuto: mergedByAuto,
+            favoriteFaceID: favoriteFaceID
+        )
+    }
+
+    public func withFavoriteFaceID(_ favoriteFaceID: UUID?) -> Person {
+        Person(
+            id: id,
+            name: name,
+            createdAt: createdAt,
+            updatedAt: Date(),
+            mergedInto: mergedInto,
+            isActive: isActive,
+            clusterQuality: clusterQuality,
+            mergedByAuto: mergedByAuto,
+            favoriteFaceID: favoriteFaceID
         )
     }
 }

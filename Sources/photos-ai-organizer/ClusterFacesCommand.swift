@@ -32,7 +32,7 @@ struct ClusterFacesCommand: AsyncParsableCommand {
         // Run database migrations
         print("📊 Running database migrations...")
         let migrationRunner = MigrationRunner(connection: connection)
-        try migrationRunner.run([.createFaceTables, .addPersonQualityColumn, .addAutoMergeFlag])
+        try migrationRunner.run([.createFaceTables, .addPersonQualityColumn, .addAutoMergeFlag, .addFavoriteFaceColumn])
 
         let faceStore = FaceStore(config: config)
         let recognitionService = FaceRecognitionService()

@@ -11,19 +11,20 @@ public final class FaceStore {
     
     public func savePerson(_ person: Person, connection: Connection) throws {
         let sql = """
-        INSERT INTO persons (id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        INSERT INTO persons (id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             updated_at = EXCLUDED.updated_at,
             merged_into = EXCLUDED.merged_into,
             is_active = EXCLUDED.is_active,
             cluster_quality = EXCLUDED.cluster_quality,
-            merged_by_auto = EXCLUDED.merged_by_auto;
+            merged_by_auto = EXCLUDED.merged_by_auto,
+            favorite_face_id = EXCLUDED.favorite_face_id;
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
-        
+
         let params: [PostgresValueConvertible?] = [
             person.id.uuidString,
             person.name,
@@ -32,7 +33,8 @@ public final class FaceStore {
             person.mergedInto?.uuidString,
             person.isActive,
             person.clusterQuality.map { Double($0) },
-            person.mergedByAuto
+            person.mergedByAuto,
+            person.favoriteFaceID?.uuidString
         ]
         _ = try statement.execute(parameterValues: params)
     }
@@ -367,13 +369,13 @@ public final class FaceStore {
     
     public func getPerson(_ personID: UUID, connection: Connection) throws -> Person? {
         let sql = """
-        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id
         FROM persons
         WHERE id = $1;
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
-        
+
         let cursor = try statement.execute(parameterValues: [personID.uuidString])
         for row in cursor {
             let resolved = try row.get()
@@ -384,13 +386,15 @@ public final class FaceStore {
                   let isActive = try resolved.columns[5].optionalBool() else {
                 continue
             }
-            
+
             let name = try resolved.columns[1].optionalString()
             let mergedIntoString = try resolved.columns[4].optionalString()
             let mergedInto = mergedIntoString != nil ? UUID(uuidString: mergedIntoString!) : nil
             let quality = try resolved.columns[6].optionalDouble().map(Float.init)
             let mergedByAuto = try resolved.columns[7].optionalBool() ?? false
-            
+            let favoriteFaceIDString = try resolved.columns[8].optionalString()
+            let favoriteFaceID = favoriteFaceIDString != nil ? UUID(uuidString: favoriteFaceIDString!) : nil
+
             return Person(
                 id: id,
                 name: name,
@@ -399,7 +403,8 @@ public final class FaceStore {
                 mergedInto: mergedInto,
                 isActive: isActive,
                 clusterQuality: quality,
-                mergedByAuto: mergedByAuto
+                mergedByAuto: mergedByAuto,
+                favoriteFaceID: favoriteFaceID
             )
         }
 
@@ -410,9 +415,9 @@ public final class FaceStore {
         let sql = """
         SELECT
             source.id, source.name, source.created_at, source.updated_at, source.merged_into,
-            source.is_active, source.cluster_quality, source.merged_by_auto,
+            source.is_active, source.cluster_quality, source.merged_by_auto, source.favorite_face_id,
             target.id, target.name, target.created_at, target.updated_at, target.merged_into,
-            target.is_active, target.cluster_quality, target.merged_by_auto
+            target.is_active, target.cluster_quality, target.merged_by_auto, target.favorite_face_id
         FROM persons source
         JOIN persons target ON source.merged_into = target.id
         WHERE source.merged_by_auto = TRUE
@@ -430,11 +435,11 @@ public final class FaceStore {
                   let sourceCreatedAt = try resolved.columns[2].optionalTimestampWithTimeZone()?.date,
                   let sourceUpdatedAt = try resolved.columns[3].optionalTimestampWithTimeZone()?.date,
                   let sourceIsActive = try resolved.columns[5].optionalBool(),
-                  let targetIDString = try resolved.columns[8].optionalString(),
+                  let targetIDString = try resolved.columns[9].optionalString(),
                   let targetID = UUID(uuidString: targetIDString),
-                  let targetCreatedAt = try resolved.columns[10].optionalTimestampWithTimeZone()?.date,
-                  let targetUpdatedAt = try resolved.columns[11].optionalTimestampWithTimeZone()?.date,
-                  let targetIsActive = try resolved.columns[13].optionalBool() else {
+                  let targetCreatedAt = try resolved.columns[11].optionalTimestampWithTimeZone()?.date,
+                  let targetUpdatedAt = try resolved.columns[12].optionalTimestampWithTimeZone()?.date,
+                  let targetIsActive = try resolved.columns[14].optionalBool() else {
                 continue
             }
 
@@ -442,11 +447,13 @@ public final class FaceStore {
             let sourceMergedInto = try resolved.columns[4].optionalString().flatMap(UUID.init)
             let sourceQuality = try resolved.columns[6].optionalDouble().map(Float.init)
             let sourceMergedByAuto = try resolved.columns[7].optionalBool() ?? false
+            let sourceFavoriteFaceID = try resolved.columns[8].optionalString().flatMap(UUID.init)
 
-            let targetName = try resolved.columns[9].optionalString()
-            let targetMergedInto = try resolved.columns[12].optionalString().flatMap(UUID.init)
-            let targetQuality = try resolved.columns[14].optionalDouble().map(Float.init)
-            let targetMergedByAuto = try resolved.columns[15].optionalBool() ?? false
+            let targetName = try resolved.columns[10].optionalString()
+            let targetMergedInto = try resolved.columns[13].optionalString().flatMap(UUID.init)
+            let targetQuality = try resolved.columns[15].optionalDouble().map(Float.init)
+            let targetMergedByAuto = try resolved.columns[16].optionalBool() ?? false
+            let targetFavoriteFaceID = try resolved.columns[17].optionalString().flatMap(UUID.init)
 
             let source = Person(
                 id: sourceID,
@@ -456,7 +463,8 @@ public final class FaceStore {
                 mergedInto: sourceMergedInto,
                 isActive: sourceIsActive,
                 clusterQuality: sourceQuality,
-                mergedByAuto: sourceMergedByAuto
+                mergedByAuto: sourceMergedByAuto,
+                favoriteFaceID: sourceFavoriteFaceID
             )
             let target = Person(
                 id: targetID,
@@ -466,7 +474,8 @@ public final class FaceStore {
                 mergedInto: targetMergedInto,
                 isActive: targetIsActive,
                 clusterQuality: targetQuality,
-                mergedByAuto: targetMergedByAuto
+                mergedByAuto: targetMergedByAuto,
+                favoriteFaceID: targetFavoriteFaceID
             )
             results.append((source, target))
         }
@@ -475,17 +484,17 @@ public final class FaceStore {
     
     public func getAllActivePersons(connection: Connection) throws -> [Person] {
         let sql = """
-        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id
         FROM persons
         WHERE is_active = true
         ORDER BY created_at ASC;
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
-        
+
         let cursor = try statement.execute()
         var persons: [Person] = []
-        
+
         for row in cursor {
             let resolved = try row.get()
             guard let idString = try resolved.columns[0].optionalString(),
@@ -496,13 +505,15 @@ public final class FaceStore {
                   isActive == true else {
                 continue
             }
-            
+
             let name = try resolved.columns[1].optionalString()
             let mergedIntoString = try resolved.columns[4].optionalString()
             let mergedInto = mergedIntoString != nil ? UUID(uuidString: mergedIntoString!) : nil
             let quality = try resolved.columns[6].optionalDouble().map(Float.init)
             let mergedByAuto = try resolved.columns[7].optionalBool() ?? false
-            
+            let favoriteFaceIDString = try resolved.columns[8].optionalString()
+            let favoriteFaceID = favoriteFaceIDString != nil ? UUID(uuidString: favoriteFaceIDString!) : nil
+
             persons.append(Person(
                 id: id,
                 name: name,
@@ -511,11 +522,29 @@ public final class FaceStore {
                 mergedInto: mergedInto,
                 isActive: isActive,
                 clusterQuality: quality,
-                mergedByAuto: mergedByAuto
+                mergedByAuto: mergedByAuto,
+                favoriteFaceID: favoriteFaceID
             ))
         }
 
         return persons
+    }
+
+    public func updateFavoriteFace(_ personID: UUID, faceID: UUID?, connection: Connection) throws {
+        let sql = """
+        UPDATE persons
+        SET favorite_face_id = $1, updated_at = $2
+        WHERE id = $3;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let params: [PostgresValueConvertible?] = [
+            faceID?.uuidString,
+            PostgresTimestampWithTimeZone(date: Date()),
+            personID.uuidString
+        ]
+        _ = try statement.execute(parameterValues: params)
     }
 
     public func resetUnnamedUnmergedPersons(connection: Connection) throws -> Int {
