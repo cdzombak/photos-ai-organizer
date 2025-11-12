@@ -356,7 +356,7 @@ private final class FaceDataProvider: @unchecked Sendable {
                 includeMergedDescendants: includeMerged,
                 connection: connection
             )
-            return faces.map { FacePreview(face: $0) }
+            return faces.prefix(50).map { FacePreview(face: $0) }
         }
     }
 
@@ -1102,14 +1102,7 @@ private enum FaceWebAssets {
       object-fit: cover;
       background: #f0f0f0;
       display: block;
-    }
-    .face-grid img {
-      width: 100%;
       border-radius: 12px;
-      min-height: 160px;
-      object-fit: cover;
-      background: #f0f0f0;
-      display: block;
     }
     @media (max-width: 768px) {
       header {
