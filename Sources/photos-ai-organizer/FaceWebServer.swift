@@ -1078,6 +1078,7 @@ private enum FaceWebAssets {
       border-radius: 12px;
       overflow: hidden;
       transition: transform 0.15s, box-shadow 0.15s;
+      width: 100%;
     }
     .face-thumbnail-wrapper:hover {
       transform: scale(1.02);
