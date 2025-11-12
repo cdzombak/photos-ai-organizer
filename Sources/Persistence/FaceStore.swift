@@ -519,12 +519,16 @@ public final class FaceStore {
     }
 
     public func resetUnnamedUnmergedPersons(connection: Connection) throws -> Int {
-        // Count persons to be reset
+        // Count persons to be reset (unnamed, unmerged, and not referenced by other persons)
         let countSQL = """
-        SELECT COUNT(*) FROM persons
-        WHERE name IS NULL
-          AND merged_into IS NULL
-          AND is_active = true;
+        SELECT COUNT(*) FROM persons p
+        WHERE p.name IS NULL
+          AND p.merged_into IS NULL
+          AND p.is_active = true
+          AND NOT EXISTS (
+            SELECT 1 FROM persons p2
+            WHERE p2.merged_into = p.id
+          );
         """
         let countStatement = try connection.prepareStatement(text: countSQL)
         defer { countStatement.close() }
@@ -538,27 +542,35 @@ public final class FaceStore {
 
         guard count > 0 else { return 0 }
 
-        // Reset face assignments for unnamed unmerged persons
+        // Reset face assignments for unnamed unmerged persons that aren't merge targets
         let resetSQL = """
         UPDATE face_detections
         SET person_id = NULL
         WHERE person_id IN (
-            SELECT id FROM persons
-            WHERE name IS NULL
-              AND merged_into IS NULL
-              AND is_active = true
+            SELECT p.id FROM persons p
+            WHERE p.name IS NULL
+              AND p.merged_into IS NULL
+              AND p.is_active = true
+              AND NOT EXISTS (
+                SELECT 1 FROM persons p2
+                WHERE p2.merged_into = p.id
+              )
         );
         """
         let resetStatement = try connection.prepareStatement(text: resetSQL)
         defer { resetStatement.close() }
         _ = try resetStatement.execute()
 
-        // Delete the persons
+        // Delete the persons that aren't referenced as merge targets
         let deleteSQL = """
-        DELETE FROM persons
-        WHERE name IS NULL
-          AND merged_into IS NULL
-          AND is_active = true;
+        DELETE FROM persons p
+        WHERE p.name IS NULL
+          AND p.merged_into IS NULL
+          AND p.is_active = true
+          AND NOT EXISTS (
+            SELECT 1 FROM persons p2
+            WHERE p2.merged_into = p.id
+          );
         """
         let deleteStatement = try connection.prepareStatement(text: deleteSQL)
         defer { deleteStatement.close() }
