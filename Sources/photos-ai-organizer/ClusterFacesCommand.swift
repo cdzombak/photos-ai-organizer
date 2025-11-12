@@ -52,17 +52,22 @@ struct ClusterFacesCommand: AsyncParsableCommand {
         let flaggedPersons = try faceStore.getPersonsFlaggedForReprocessing(connection: connection)
         if !flaggedPersons.isEmpty {
             print("🔧 Processing \(flaggedPersons.count) persons flagged for reprocessing...")
-            for person in flaggedPersons {
+            for (index, person) in flaggedPersons.enumerated() {
+                print("   Processing person \(index + 1)/\(flaggedPersons.count)...")
+
                 // Get all persons that are merged into this person
                 let mergedDescendants = try getMergedDescendants(of: person.id, connection: connection)
+                print("      Found \(mergedDescendants.count) merged descendants")
 
                 // Get all faces including from merged descendants
                 let faces = try faceStore.getFacesForPerson(person.id, includeMergedDescendants: true, connection: connection)
+                print("      Found \(faces.count) faces to unassign")
 
                 // Unassign all faces and mark them for high-threshold clustering
                 for face in faces {
                     try faceStore.unassignFaceFromPerson(face.id, useHighThreshold: true, connection: connection)
                 }
+                print("      Unassigned all faces")
 
                 // Un-merge and deactivate all merged descendants
                 for descendant in mergedDescendants {
@@ -72,6 +77,7 @@ struct ClusterFacesCommand: AsyncParsableCommand {
                         .withIsActive(false)
                     try faceStore.savePerson(updated, connection: connection)
                 }
+                print("      Updated \(mergedDescendants.count) descendants")
 
                 // Clear the flag and deactivate the person
                 let updated = person
