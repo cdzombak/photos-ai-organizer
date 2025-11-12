@@ -14,9 +14,6 @@ struct ClusterFacesCommand: AsyncParsableCommand {
     @Option(name: [.short, .customLong("config"), .customLong("config-path")], help: "Path to configuration file")
     var configPath: String = "photos-config.yml"
 
-    @Flag(name: .long, help: "Delete unnamed unmerged persons and recluster their faces")
-    var retryUnnamed: Bool = false
-
     func run() async throws {
         print("🔄 Starting face clustering pipeline...")
 
@@ -32,7 +29,7 @@ struct ClusterFacesCommand: AsyncParsableCommand {
         // Run database migrations
         print("📊 Running database migrations...")
         let migrationRunner = MigrationRunner(connection: connection)
-        try migrationRunner.run([.createFaceTables, .addPersonQualityColumn, .addAutoMergeFlag, .addFavoriteFaceColumn, .addNeedsReprocessingColumn])
+        try migrationRunner.run([.createFaceTables, .addPersonQualityColumn, .addAutoMergeFlag, .addFavoriteFaceColumn, .addNeedsReprocessingColumn, .addHighThresholdFlag])
 
         let faceStore = FaceStore(config: config)
         let recognitionService = FaceRecognitionService()
@@ -42,10 +39,10 @@ struct ClusterFacesCommand: AsyncParsableCommand {
             similarityThreshold: similarityThreshold
         )
 
-        // Reset unnamed unmerged persons if requested
-        if retryUnnamed {
-            print("🔄 Resetting unnamed unmerged persons...")
-            let resetCount = try faceStore.resetUnnamedUnmergedPersons(connection: connection)
+        // Reset unnamed unmerged persons
+        print("🔄 Resetting unnamed unmerged persons...")
+        let resetCount = try faceStore.resetUnnamedUnmergedPersons(connection: connection)
+        if resetCount > 0 {
             print("   ✅ Reset \(resetCount) unnamed unmerged persons")
         }
 
@@ -57,9 +54,9 @@ struct ClusterFacesCommand: AsyncParsableCommand {
                 // Get all faces for this person
                 let faces = try faceStore.getFacesForPerson(person.id, includeMergedDescendants: false, connection: connection)
 
-                // Unassign all faces
+                // Unassign all faces and mark them for high-threshold clustering
                 for face in faces {
-                    try faceStore.unassignFaceFromPerson(face.id, connection: connection)
+                    try faceStore.unassignFaceFromPerson(face.id, useHighThreshold: true, connection: connection)
                 }
 
                 // Clear the flag and deactivate the person

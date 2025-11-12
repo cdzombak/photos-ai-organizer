@@ -100,6 +100,16 @@ public extension MigrationStep {
             """
         ]
     )
+
+    static let addHighThresholdFlag = MigrationStep(
+        identifier: "006_add_high_threshold_flag",
+        statements: [
+            """
+            ALTER TABLE face_detections
+            ADD COLUMN IF NOT EXISTS use_high_threshold_clustering BOOLEAN DEFAULT FALSE;
+            """
+        ]
+    )
 }
 
 protocol SQLCommandExecutor {

@@ -60,10 +60,13 @@ public struct FaceClusteringService {
                 // Use k-NN voting via pgvector index
                 let nearestNeighbors = try faceStore.findKNearestFaces(embedding: faceEmbedding, k: kNeighbors, connection: connection)
 
+                // Use higher threshold for faces flagged for reprocessing (1.2x)
+                let effectiveThreshold = face.useHighThresholdClustering ? similarityThreshold * 1.2 : similarityThreshold
+
                 // Filter neighbors by similarity threshold
                 // pgvector <=> returns cosine distance (1 - similarity)
                 // So distance <= (1 - threshold) means similarity >= threshold
-                let maxDistance = 1.0 - similarityThreshold
+                let maxDistance = 1.0 - effectiveThreshold
                 let validNeighbors = nearestNeighbors.filter { $0.distance <= maxDistance }
 
                 // Try voting first for robustness

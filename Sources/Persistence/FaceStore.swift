@@ -80,8 +80,8 @@ public final class FaceStore {
     
     public func getUnmatchedFaces(connection: Connection, limit: Int = 1000) throws -> [FaceDetection] {
         let sql = """
-        SELECT id, asset_id, person_id, bounding_x, bounding_y, 
-               bounding_width, bounding_height, confidence, face_embedding::text, created_at
+        SELECT id, asset_id, person_id, bounding_x, bounding_y,
+               bounding_width, bounding_height, confidence, face_embedding::text, created_at, use_high_threshold_clustering
         FROM face_detections
         WHERE person_id IS NULL
         ORDER BY created_at DESC
@@ -89,10 +89,10 @@ public final class FaceStore {
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
-        
+
         let cursor = try statement.execute(parameterValues: [limit])
         var detections: [FaceDetection] = []
-        
+
         for row in cursor {
             let resolved = try row.get()
             guard let idString = try resolved.columns[0].optionalString(),
@@ -106,10 +106,10 @@ public final class FaceStore {
                   let createdAt = try resolved.columns[9].optionalTimestampWithTimeZone()?.date else {
                 continue
             }
-            
+
             let personIDString = try resolved.columns[2].optionalString()
             let personID = personIDString.flatMap(UUID.init)
-            
+
             // Parse embedding from JSON
             let faceEmbedding: [Float]?
             if let embeddingJson = try resolved.columns[8].optionalString(),
@@ -119,14 +119,16 @@ public final class FaceStore {
             } else {
                 faceEmbedding = nil
             }
-            
+
+            let useHighThresholdClustering = try resolved.columns[10].optionalBool() ?? false
+
             let boundingBox = CGRect(
                 x: boundingX,
                 y: boundingY,
                 width: boundingWidth,
                 height: boundingHeight
             )
-            
+
             detections.append(FaceDetection(
                 id: id,
                 assetID: assetID,
@@ -134,10 +136,11 @@ public final class FaceStore {
                 boundingBox: boundingBox,
                 confidence: Float(confidence),
                 faceEmbedding: faceEmbedding,
+                useHighThresholdClustering: useHighThresholdClustering,
                 createdAt: createdAt
             ))
         }
-        
+
         return detections
     }
 
@@ -356,12 +359,12 @@ public final class FaceStore {
     public func assignFaceToPerson(_ faceID: UUID, personID: UUID, connection: Connection) throws {
         let sql = """
         UPDATE face_detections
-        SET person_id = $1
+        SET person_id = $1, use_high_threshold_clustering = FALSE
         WHERE id = $2;
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
-        
+
         let params: [PostgresValueConvertible?] = [
             personID.uuidString,
             faceID.uuidString
@@ -606,15 +609,15 @@ public final class FaceStore {
         return persons
     }
 
-    public func unassignFaceFromPerson(_ faceID: UUID, connection: Connection) throws {
+    public func unassignFaceFromPerson(_ faceID: UUID, useHighThreshold: Bool = false, connection: Connection) throws {
         let sql = """
         UPDATE face_detections
-        SET person_id = NULL
+        SET person_id = NULL, use_high_threshold_clustering = $2
         WHERE id = $1;
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
-        _ = try statement.execute(parameterValues: [faceID.uuidString])
+        _ = try statement.execute(parameterValues: [faceID.uuidString, useHighThreshold])
     }
 
     public func resetUnnamedUnmergedPersons(connection: Connection) throws -> Int {

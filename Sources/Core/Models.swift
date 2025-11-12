@@ -408,6 +408,7 @@ public struct FaceDetection: Sendable {
     public let boundingBox: CGRect
     public let confidence: Float
     public var faceEmbedding: [Float]?
+    public var useHighThresholdClustering: Bool
     public let createdAt: Date
 
     public init(
@@ -417,6 +418,7 @@ public struct FaceDetection: Sendable {
         boundingBox: CGRect,
         confidence: Float,
         faceEmbedding: [Float]? = nil,
+        useHighThresholdClustering: Bool = false,
         createdAt: Date = Date()
     ) {
         self.id = id
@@ -425,6 +427,7 @@ public struct FaceDetection: Sendable {
         self.boundingBox = boundingBox
         self.confidence = confidence
         self.faceEmbedding = faceEmbedding
+        self.useHighThresholdClustering = useHighThresholdClustering
         self.createdAt = createdAt
     }
 
@@ -436,6 +439,7 @@ public struct FaceDetection: Sendable {
             boundingBox: boundingBox,
             confidence: confidence,
             faceEmbedding: faceEmbedding,
+            useHighThresholdClustering: useHighThresholdClustering,
             createdAt: createdAt
         )
     }
@@ -448,6 +452,7 @@ public struct FaceDetection: Sendable {
             boundingBox: boundingBox,
             confidence: confidence,
             faceEmbedding: faceEmbedding,
+            useHighThresholdClustering: useHighThresholdClustering,
             createdAt: createdAt
         )
     }
