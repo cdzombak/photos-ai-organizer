@@ -39,14 +39,7 @@ struct ClusterFacesCommand: AsyncParsableCommand {
             similarityThreshold: similarityThreshold
         )
 
-        // Reset unnamed unmerged persons
-        print("🔄 Resetting unnamed unmerged persons...")
-        let resetCount = try faceStore.resetUnnamedUnmergedPersons(connection: connection)
-        if resetCount > 0 {
-            print("   ✅ Reset \(resetCount) unnamed unmerged persons")
-        }
-
-        // Process persons flagged for reprocessing
+        // Process persons flagged for reprocessing first (before resetting unnamed persons)
         let flaggedPersons = try faceStore.getPersonsFlaggedForReprocessing(connection: connection)
         if !flaggedPersons.isEmpty {
             print("🔧 Processing \(flaggedPersons.count) persons flagged for reprocessing...")
@@ -67,6 +60,13 @@ struct ClusterFacesCommand: AsyncParsableCommand {
 
                 print("   ✅ Unassigned \(faces.count) faces from \(person.name ?? "Unnamed person")")
             }
+        }
+
+        // Reset unnamed unmerged persons (excluding those just flagged for reprocessing)
+        print("🔄 Resetting unnamed unmerged persons...")
+        let resetCount = try faceStore.resetUnnamedUnmergedPersons(connection: connection)
+        if resetCount > 0 {
+            print("   ✅ Reset \(resetCount) unnamed unmerged persons")
         }
 
         // Execute clustering
