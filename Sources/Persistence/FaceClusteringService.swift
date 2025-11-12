@@ -59,13 +59,20 @@ public struct FaceClusteringService {
 
                 // Use k-NN voting via pgvector index
                 let nearestNeighbors = try faceStore.findKNearestFaces(embedding: faceEmbedding, k: kNeighbors, connection: connection)
-                let votedPersonID = voteOnPerson(from: nearestNeighbors, votingThreshold: votingThreshold)
+
+                // Filter neighbors by similarity threshold
+                // pgvector <=> returns cosine distance (1 - similarity)
+                // So distance <= (1 - threshold) means similarity >= threshold
+                let maxDistance = 1.0 - similarityThreshold
+                let validNeighbors = nearestNeighbors.filter { $0.distance <= maxDistance }
+
+                let votedPersonID = voteOnPerson(from: validNeighbors, votingThreshold: votingThreshold)
 
                 if let personID = votedPersonID, let _ = personLookup[personID] {
                     // Assign to winning person from k-NN vote
                     try faceStore.assignFaceToPerson(face.id, personID: personID, connection: connection)
                 } else {
-                    // No strong vote consensus, create new person
+                    // No strong vote consensus or no similar neighbors, create new person
                     let newPerson = try faceStore.createPerson(connection: connection)
                     try faceStore.assignFaceToPerson(face.id, personID: newPerson.id, connection: connection)
                     createdPersons.append(newPerson)

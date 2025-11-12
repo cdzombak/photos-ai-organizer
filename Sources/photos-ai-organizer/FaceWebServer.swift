@@ -373,8 +373,10 @@ private final class FaceThumbnailProvider: @unchecked Sendable {
         options.isSynchronous = true
         options.deliveryMode = .highQualityFormat
         var imageData: Data?
-        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
+        var orientation: CGImagePropertyOrientation = .up
+        PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, imageOrientation, _ in
             imageData = data
+            orientation = imageOrientation
         }
         guard let originalData = imageData,
               let source = CGImageSourceCreateWithData(originalData as CFData, nil),
@@ -382,7 +384,8 @@ private final class FaceThumbnailProvider: @unchecked Sendable {
             return nil
         }
 
-        guard let cropped = cropFace(from: fullImage, boundingBox: detection.boundingBox) else {
+        guard let oriented = applyOrientation(fullImage, orientation: orientation),
+              let cropped = cropFace(from: oriented, boundingBox: detection.boundingBox) else {
             return nil
         }
 
@@ -390,6 +393,71 @@ private final class FaceThumbnailProvider: @unchecked Sendable {
         guard let jpegData = makeJPEG(from: scaled) else { return nil }
         cache.setObject(jpegData as NSData, forKey: key, cost: jpegData.count)
         return jpegData
+    }
+
+    private func applyOrientation(_ image: CGImage, orientation: CGImagePropertyOrientation) -> CGImage? {
+        guard orientation != .up else { return image }
+
+        var transform = CGAffineTransform.identity
+        var drawSize = CGSize(width: image.width, height: image.height)
+
+        func bitmapInfo(for image: CGImage) -> UInt32 {
+            let alpha = image.alphaInfo
+            switch alpha {
+            case .none, .noneSkipLast, .noneSkipFirst:
+                return CGImageAlphaInfo.noneSkipLast.rawValue
+            default:
+                return CGImageAlphaInfo.premultipliedLast.rawValue
+            }
+        }
+
+        switch orientation {
+        case .down, .downMirrored:
+            transform = transform.translatedBy(x: drawSize.width, y: drawSize.height).rotated(by: .pi)
+        case .left, .leftMirrored:
+            drawSize = CGSize(width: drawSize.height, height: drawSize.width)
+            transform = transform.translatedBy(x: 0, y: drawSize.width).rotated(by: -.pi / 2)
+        case .right, .rightMirrored:
+            drawSize = CGSize(width: drawSize.height, height: drawSize.width)
+            transform = transform.translatedBy(x: drawSize.height, y: 0).rotated(by: .pi / 2)
+        case .up, .upMirrored:
+            break
+        @unknown default:
+            break
+        }
+
+        switch orientation {
+        case .upMirrored, .downMirrored:
+            transform = transform.translatedBy(x: drawSize.width, y: 0).scaledBy(x: -1, y: 1)
+        case .leftMirrored, .rightMirrored:
+            transform = transform.translatedBy(x: drawSize.height, y: 0).scaledBy(x: -1, y: 1)
+        default:
+            break
+        }
+
+        guard let colorSpace = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        guard let context = CGContext(
+            data: nil,
+            width: Int(drawSize.width),
+            height: Int(drawSize.height),
+            bitsPerComponent: image.bitsPerComponent,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo(for: image)
+        ) else {
+            return nil
+        }
+
+        context.concatenate(transform)
+        let drawRect: CGRect
+        switch orientation {
+        case .left, .leftMirrored, .right, .rightMirrored:
+            drawRect = CGRect(x: 0, y: 0, width: image.height, height: image.width)
+        default:
+            drawRect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        }
+        context.draw(image, in: drawRect)
+        return context.makeImage()
     }
 
     private func cropFace(from image: CGImage, boundingBox: CGRect) -> CGImage? {
