@@ -38,52 +38,42 @@ public struct FaceClusteringService {
         self.similarityThreshold = similarityThreshold
     }
     
-    public func clusterUnmatchedFaces(connection: Connection, batchSize: Int = 2000) async throws -> [Person] {
+    public func clusterUnmatchedFaces(connection: Connection, batchSize: Int = 2000, kNeighbors: Int = 10, votingThreshold: Float = 0.4) async throws -> [Person] {
         var createdPersons: [Person] = []
         var batchNumber = 0
         let existingPersons = try faceStore.getAllActivePersons(connection: connection)
         var personLookup = Dictionary(uniqueKeysWithValues: existingPersons.map { ($0.id, $0) })
-        var centroids = try loadPersonCentroids(for: existingPersons, connection: connection)
         var totalProcessed = 0
-        
+
+        print("   🗳️  Using k-NN voting with k=\(kNeighbors), threshold=\(String(format: "%.1f%%", votingThreshold * 100))")
+
         while true {
             let unmatchedFaces = try faceStore.getUnmatchedFaces(connection: connection, limit: batchSize)
             guard !unmatchedFaces.isEmpty else { break }
             batchNumber += 1
             print("   🔄 Clustering batch \(batchNumber) containing \(unmatchedFaces.count) faces (processed so far: \(totalProcessed))")
-            var personsTouchedThisBatch: Set<UUID> = []
-            
+
             for face in unmatchedFaces {
                 guard let faceEmbedding = face.faceEmbedding else { continue }
                 totalProcessed += 1
-                let match = bestMatch(for: faceEmbedding, within: centroids)
-                if let personID = match,
-                   let _ = personLookup[personID] {
+
+                // Use k-NN voting via pgvector index
+                let nearestNeighbors = try faceStore.findKNearestFaces(embedding: faceEmbedding, k: kNeighbors, connection: connection)
+                let votedPersonID = voteOnPerson(from: nearestNeighbors, votingThreshold: votingThreshold)
+
+                if let personID = votedPersonID, let _ = personLookup[personID] {
+                    // Assign to winning person from k-NN vote
                     try faceStore.assignFaceToPerson(face.id, personID: personID, connection: connection)
-                    if var centroid = centroids[personID] {
-                        centroid.update(with: faceEmbedding)
-                        centroids[personID] = centroid
-                    } else {
-                        centroids[personID] = PersonCentroid(vector: faceEmbedding, count: 1)
-                    }
-                    personsTouchedThisBatch.insert(personID)
                 } else {
+                    // No strong vote consensus, create new person
                     let newPerson = try faceStore.createPerson(connection: connection)
                     try faceStore.assignFaceToPerson(face.id, personID: newPerson.id, connection: connection)
                     createdPersons.append(newPerson)
                     personLookup[newPerson.id] = newPerson
-                    centroids[newPerson.id] = PersonCentroid(vector: faceEmbedding, count: 1)
-                    personsTouchedThisBatch.insert(newPerson.id)
                 }
             }
-
-            if !personsTouchedThisBatch.isEmpty {
-                print("   🔄 Recomputing centroids for \(personsTouchedThisBatch.count) persons...")
-                try recomputeCentroids(for: personsTouchedThisBatch, centroids: &centroids, connection: connection)
-                print("   ✅ Centroids recomputed")
-            }
         }
-        
+
         print("   ✅ Clustering completed. Processed \(totalProcessed) faces, created \(createdPersons.count) new persons.")
         return createdPersons
     }
@@ -145,7 +135,28 @@ public struct FaceClusteringService {
         }
         return PersonCentroid(vector: average, count: count)
     }
-    
+
+    /// Vote on person ID from k-NN results
+    /// Returns winning person ID if vote percentage exceeds threshold, nil otherwise
+    private func voteOnPerson(from neighbors: [(personID: UUID, distance: Float)], votingThreshold: Float = 0.4) -> UUID? {
+        guard !neighbors.isEmpty else { return nil }
+
+        // Count votes per person ID
+        var voteCounts: [UUID: Int] = [:]
+        for (personID, _) in neighbors {
+            voteCounts[personID, default: 0] += 1
+        }
+
+        // Find person with most votes
+        guard let (winningPersonID, votes) = voteCounts.max(by: { $0.value < $1.value }) else {
+            return nil
+        }
+
+        // Check if winning person has enough votes (percentage of k)
+        let votePercentage = Float(votes) / Float(neighbors.count)
+        return votePercentage >= votingThreshold ? winningPersonID : nil
+    }
+
     public func clusterFacesIncremental(connection: Connection, newFaces: [FaceDetection]) async throws -> [Person] {
         var newPersons: [Person] = []
         

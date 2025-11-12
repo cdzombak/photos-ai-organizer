@@ -694,6 +694,40 @@ public final class FaceStore {
         return nil
     }
 
+    /// Find k nearest face embeddings using pgvector's IVFFlat index
+    /// Returns person IDs and distances for voting-based clustering
+    public func findKNearestFaces(embedding: [Float], k: Int, connection: Connection) throws -> [(personID: UUID, distance: Float)] {
+        let embeddingJson = try JSONSerialization.data(withJSONObject: embedding.map { Double($0) })
+        guard let embeddingString = String(data: embeddingJson, encoding: .utf8) else {
+            return []
+        }
+
+        let sql = """
+        SELECT person_id, face_embedding <=> $1::vector as distance
+        FROM face_detections
+        WHERE person_id IS NOT NULL AND face_embedding IS NOT NULL
+        ORDER BY face_embedding <=> $1::vector
+        LIMIT $2;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute(parameterValues: [embeddingString, k])
+        var results: [(UUID, Float)] = []
+
+        for row in cursor {
+            let resolved = try row.get()
+            guard let personIDString = try resolved.columns[0].optionalString(),
+                  let personID = UUID(uuidString: personIDString),
+                  let distance = try resolved.columns[1].optionalDouble() else {
+                continue
+            }
+            results.append((personID, Float(distance)))
+        }
+
+        return results
+    }
+
     public func getProcessingStatus(for assetID: String, connection: Connection) throws -> FaceProcessingStatus? {
         let sql = """
         SELECT asset_id, faces_detected, processed_at
