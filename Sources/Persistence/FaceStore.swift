@@ -11,8 +11,8 @@ public final class FaceStore {
     
     public func savePerson(_ person: Person, connection: Connection) throws {
         let sql = """
-        INSERT INTO persons (id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        INSERT INTO persons (id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             updated_at = EXCLUDED.updated_at,
@@ -21,7 +21,8 @@ public final class FaceStore {
             cluster_quality = EXCLUDED.cluster_quality,
             merged_by_auto = EXCLUDED.merged_by_auto,
             favorite_face_id = EXCLUDED.favorite_face_id,
-            needs_reprocessing = EXCLUDED.needs_reprocessing;
+            needs_reprocessing = EXCLUDED.needs_reprocessing,
+            is_ignored = EXCLUDED.is_ignored;
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
@@ -36,7 +37,8 @@ public final class FaceStore {
             person.clusterQuality.map { Double($0) },
             person.mergedByAuto,
             person.favoriteFaceID?.uuidString,
-            person.needsReprocessing
+            person.needsReprocessing,
+            person.isIgnored
         ]
         _ = try statement.execute(parameterValues: params)
     }
@@ -374,7 +376,7 @@ public final class FaceStore {
     
     public func getPerson(_ personID: UUID, connection: Connection) throws -> Person? {
         let sql = """
-        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored
         FROM persons
         WHERE id = $1;
         """
@@ -400,6 +402,7 @@ public final class FaceStore {
             let favoriteFaceIDString = try resolved.columns[8].optionalString()
             let favoriteFaceID = favoriteFaceIDString != nil ? UUID(uuidString: favoriteFaceIDString!) : nil
             let needsReprocessing = try resolved.columns[9].optionalBool() ?? false
+            let isIgnored = try resolved.columns[10].optionalBool() ?? false
 
             return Person(
                 id: id,
@@ -411,7 +414,8 @@ public final class FaceStore {
                 clusterQuality: quality,
                 mergedByAuto: mergedByAuto,
                 favoriteFaceID: favoriteFaceID,
-                needsReprocessing: needsReprocessing
+                needsReprocessing: needsReprocessing,
+                isIgnored: isIgnored
             )
         }
 
@@ -422,9 +426,9 @@ public final class FaceStore {
         let sql = """
         SELECT
             source.id, source.name, source.created_at, source.updated_at, source.merged_into,
-            source.is_active, source.cluster_quality, source.merged_by_auto, source.favorite_face_id, source.needs_reprocessing,
+            source.is_active, source.cluster_quality, source.merged_by_auto, source.favorite_face_id, source.needs_reprocessing, source.is_ignored,
             target.id, target.name, target.created_at, target.updated_at, target.merged_into,
-            target.is_active, target.cluster_quality, target.merged_by_auto, target.favorite_face_id, target.needs_reprocessing
+            target.is_active, target.cluster_quality, target.merged_by_auto, target.favorite_face_id, target.needs_reprocessing, target.is_ignored
         FROM persons source
         JOIN persons target ON source.merged_into = target.id
         WHERE source.merged_by_auto = TRUE
@@ -442,11 +446,11 @@ public final class FaceStore {
                   let sourceCreatedAt = try resolved.columns[2].optionalTimestampWithTimeZone()?.date,
                   let sourceUpdatedAt = try resolved.columns[3].optionalTimestampWithTimeZone()?.date,
                   let sourceIsActive = try resolved.columns[5].optionalBool(),
-                  let targetIDString = try resolved.columns[10].optionalString(),
+                  let targetIDString = try resolved.columns[11].optionalString(),
                   let targetID = UUID(uuidString: targetIDString),
-                  let targetCreatedAt = try resolved.columns[12].optionalTimestampWithTimeZone()?.date,
-                  let targetUpdatedAt = try resolved.columns[13].optionalTimestampWithTimeZone()?.date,
-                  let targetIsActive = try resolved.columns[15].optionalBool() else {
+                  let targetCreatedAt = try resolved.columns[13].optionalTimestampWithTimeZone()?.date,
+                  let targetUpdatedAt = try resolved.columns[14].optionalTimestampWithTimeZone()?.date,
+                  let targetIsActive = try resolved.columns[16].optionalBool() else {
                 continue
             }
 
@@ -456,13 +460,15 @@ public final class FaceStore {
             let sourceMergedByAuto = try resolved.columns[7].optionalBool() ?? false
             let sourceFavoriteFaceID = try resolved.columns[8].optionalString().flatMap(UUID.init)
             let sourceNeedsReprocessing = try resolved.columns[9].optionalBool() ?? false
+            let sourceIsIgnored = try resolved.columns[10].optionalBool() ?? false
 
-            let targetName = try resolved.columns[11].optionalString()
-            let targetMergedInto = try resolved.columns[14].optionalString().flatMap(UUID.init)
-            let targetQuality = try resolved.columns[16].optionalDouble().map(Float.init)
-            let targetMergedByAuto = try resolved.columns[17].optionalBool() ?? false
-            let targetFavoriteFaceID = try resolved.columns[18].optionalString().flatMap(UUID.init)
-            let targetNeedsReprocessing = try resolved.columns[19].optionalBool() ?? false
+            let targetName = try resolved.columns[12].optionalString()
+            let targetMergedInto = try resolved.columns[15].optionalString().flatMap(UUID.init)
+            let targetQuality = try resolved.columns[17].optionalDouble().map(Float.init)
+            let targetMergedByAuto = try resolved.columns[18].optionalBool() ?? false
+            let targetFavoriteFaceID = try resolved.columns[19].optionalString().flatMap(UUID.init)
+            let targetNeedsReprocessing = try resolved.columns[20].optionalBool() ?? false
+            let targetIsIgnored = try resolved.columns[21].optionalBool() ?? false
 
             let source = Person(
                 id: sourceID,
@@ -474,7 +480,8 @@ public final class FaceStore {
                 clusterQuality: sourceQuality,
                 mergedByAuto: sourceMergedByAuto,
                 favoriteFaceID: sourceFavoriteFaceID,
-                needsReprocessing: sourceNeedsReprocessing
+                needsReprocessing: sourceNeedsReprocessing,
+                isIgnored: sourceIsIgnored
             )
             let target = Person(
                 id: targetID,
@@ -486,7 +493,8 @@ public final class FaceStore {
                 clusterQuality: targetQuality,
                 mergedByAuto: targetMergedByAuto,
                 favoriteFaceID: targetFavoriteFaceID,
-                needsReprocessing: targetNeedsReprocessing
+                needsReprocessing: targetNeedsReprocessing,
+                isIgnored: targetIsIgnored
             )
             results.append((source, target))
         }
@@ -495,9 +503,9 @@ public final class FaceStore {
     
     public func getAllActivePersons(connection: Connection) throws -> [Person] {
         let sql = """
-        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored
         FROM persons
-        WHERE is_active = true
+        WHERE is_active = true AND is_ignored = false
         ORDER BY created_at ASC;
         """
         let statement = try connection.prepareStatement(text: sql)
@@ -525,6 +533,7 @@ public final class FaceStore {
             let favoriteFaceIDString = try resolved.columns[8].optionalString()
             let favoriteFaceID = favoriteFaceIDString != nil ? UUID(uuidString: favoriteFaceIDString!) : nil
             let needsReprocessing = try resolved.columns[9].optionalBool() ?? false
+            let isIgnored = try resolved.columns[10].optionalBool() ?? false
 
             persons.append(Person(
                 id: id,
@@ -536,7 +545,8 @@ public final class FaceStore {
                 clusterQuality: quality,
                 mergedByAuto: mergedByAuto,
                 favoriteFaceID: favoriteFaceID,
-                needsReprocessing: needsReprocessing
+                needsReprocessing: needsReprocessing,
+                isIgnored: isIgnored
             ))
         }
 
@@ -562,7 +572,7 @@ public final class FaceStore {
 
     public func getPersonsFlaggedForReprocessing(connection: Connection) throws -> [Person] {
         let sql = """
-        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored
         FROM persons
         WHERE needs_reprocessing = true AND is_active = true
         ORDER BY created_at ASC;
@@ -591,6 +601,7 @@ public final class FaceStore {
             let favoriteFaceIDString = try resolved.columns[8].optionalString()
             let favoriteFaceID = favoriteFaceIDString != nil ? UUID(uuidString: favoriteFaceIDString!) : nil
             let needsReprocessing = try resolved.columns[9].optionalBool() ?? false
+            let isIgnored = try resolved.columns[10].optionalBool() ?? false
 
             persons.append(Person(
                 id: id,
@@ -602,7 +613,8 @@ public final class FaceStore {
                 clusterQuality: quality,
                 mergedByAuto: mergedByAuto,
                 favoriteFaceID: favoriteFaceID,
-                needsReprocessing: needsReprocessing
+                needsReprocessing: needsReprocessing,
+                isIgnored: isIgnored
             ))
         }
 
@@ -621,12 +633,13 @@ public final class FaceStore {
     }
 
     public func resetUnnamedUnmergedPersons(connection: Connection) throws -> Int {
-        // Count persons to be reset (unnamed, unmerged, and not referenced by other persons)
+        // Count persons to be reset (unnamed, unmerged, not ignored, and not referenced by other persons)
         let countSQL = """
         SELECT COUNT(*) FROM persons p
         WHERE p.name IS NULL
           AND p.merged_into IS NULL
           AND p.is_active = true
+          AND p.is_ignored = false
           AND NOT EXISTS (
             SELECT 1 FROM persons p2
             WHERE p2.merged_into = p.id
@@ -644,7 +657,7 @@ public final class FaceStore {
 
         guard count > 0 else { return 0 }
 
-        // Reset face assignments for unnamed unmerged persons that aren't merge targets
+        // Reset face assignments for unnamed unmerged non-ignored persons that aren't merge targets
         let resetSQL = """
         UPDATE face_detections
         SET person_id = NULL
@@ -653,6 +666,7 @@ public final class FaceStore {
             WHERE p.name IS NULL
               AND p.merged_into IS NULL
               AND p.is_active = true
+              AND p.is_ignored = false
               AND NOT EXISTS (
                 SELECT 1 FROM persons p2
                 WHERE p2.merged_into = p.id
@@ -669,6 +683,7 @@ public final class FaceStore {
         WHERE p.name IS NULL
           AND p.merged_into IS NULL
           AND p.is_active = true
+          AND p.is_ignored = false
           AND NOT EXISTS (
             SELECT 1 FROM persons p2
             WHERE p2.merged_into = p.id

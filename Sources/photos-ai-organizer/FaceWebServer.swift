@@ -230,6 +230,20 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
                       let personID = UUID(uuidString: String(pathComponents[2])) {
                 try dataProvider.markPersonForReprocessing(personID: personID)
                 return respond(status: .noContent, context: context)
+            } else if pathComponents.count == 4,
+                      pathComponents[0] == "api",
+                      pathComponents[1] == "persons",
+                      pathComponents[3] == "ignore",
+                      let personID = UUID(uuidString: String(pathComponents[2])) {
+                try dataProvider.ignorePerson(personID: personID)
+                return respond(status: .noContent, context: context)
+            } else if pathComponents.count == 4,
+                      pathComponents[0] == "api",
+                      pathComponents[1] == "persons",
+                      pathComponents[3] == "unignore",
+                      let personID = UUID(uuidString: String(pathComponents[2])) {
+                try dataProvider.unignorePerson(personID: personID)
+                return respond(status: .noContent, context: context)
             } else {
                 return respond(status: .notFound, context: context)
             }
@@ -464,6 +478,28 @@ private final class FaceDataProvider: @unchecked Sendable {
                 throw FaceDataError.personNotFound
             }
             let updated = person.withNeedsReprocessing(true)
+            try faceStore.savePerson(updated, connection: connection)
+        }
+    }
+
+    func ignorePerson(personID: UUID) throws {
+        try withConnection { connection in
+            guard let person = try faceStore.getPerson(personID, connection: connection) else {
+                throw FaceDataError.personNotFound
+            }
+            // Set name to null and mark as ignored
+            let updated = person.withName(nil).withIsIgnored(true)
+            try faceStore.savePerson(updated, connection: connection)
+        }
+    }
+
+    func unignorePerson(personID: UUID) throws {
+        try withConnection { connection in
+            guard let person = try faceStore.getPerson(personID, connection: connection) else {
+                throw FaceDataError.personNotFound
+            }
+            // Clear ignored flag
+            let updated = person.withIsIgnored(false)
             try faceStore.savePerson(updated, connection: connection)
         }
     }
@@ -750,7 +786,11 @@ private enum FaceWebAssets {
                 <span id=\"save-status\" class=\"save-status\"></span>
               </div>
               <p id=\"drawer-meta\"></p>
-              <button id=\"reprocess-btn\" class=\"reprocess-btn\" title=\"Flag for reprocessing with higher threshold\">Reprocess cluster</button>
+              <div class=\"drawer-actions\">
+                <button id=\"reprocess-btn\" class=\"reprocess-btn\" title=\"Flag for reprocessing with higher threshold\">Reprocess cluster</button>
+                <button id=\"ignore-btn\" class=\"ignore-btn\" title=\"Hide this person from the UI\">Ignore person</button>
+                <button id=\"unignore-btn\" class=\"unignore-btn hidden\" title=\"Restore this person to the UI\">Undo ignore</button>
+              </div>
             </div>
             <button id=\"drawer-close\" aria-label=\"Close\">&times;</button>
           </div>
@@ -1094,8 +1134,13 @@ private enum FaceWebAssets {
       color: rgba(0,0,0,0.5);
       font-style: italic;
     }
-    .reprocess-btn {
+    .drawer-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
       margin-top: 8px;
+    }
+    .reprocess-btn {
       padding: 8px 16px;
       background: #ff9500;
       color: white;
@@ -1111,6 +1156,42 @@ private enum FaceWebAssets {
       transform: translateY(-1px);
     }
     .reprocess-btn:active {
+      transform: translateY(0);
+    }
+    .ignore-btn {
+      padding: 8px 16px;
+      background: #8e8e93;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.15s;
+    }
+    .ignore-btn:hover {
+      background: #636366;
+      transform: translateY(-1px);
+    }
+    .ignore-btn:active {
+      transform: translateY(0);
+    }
+    .unignore-btn {
+      padding: 8px 16px;
+      background: #34c759;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.15s;
+    }
+    .unignore-btn:hover {
+      background: #30b350;
+      transform: translateY(-1px);
+    }
+    .unignore-btn:active {
       transform: translateY(0);
     }
     .hidden {
@@ -1212,6 +1293,8 @@ private enum FaceWebAssets {
     function setupDrawer() {
       document.getElementById('drawer-close').addEventListener('click', closeDrawer);
       document.getElementById('reprocess-btn').addEventListener('click', reprocessCurrentPerson);
+      document.getElementById('ignore-btn').addEventListener('click', ignoreCurrentPerson);
+      document.getElementById('unignore-btn').addEventListener('click', unignoreCurrentPerson);
     }
 
     function setupNameEditor() {
@@ -2027,6 +2110,59 @@ private enum FaceWebAssets {
       } catch (error) {
         console.error(error);
         alert('Unable to flag cluster for reprocessing. Check the console for details.');
+      }
+    }
+
+    async function ignoreCurrentPerson() {
+      if (!state.currentPersonID) return;
+
+      const confirmMsg = 'Ignore this person? They will be hidden from the UI and their name will be cleared. You can undo this before closing the drawer.';
+      if (!confirm(confirmMsg)) return;
+
+      try {
+        const response = await fetch(`/api/persons/${state.currentPersonID}/ignore`, {
+          method: 'POST'
+        });
+        if (!response.ok) throw new Error('Failed to ignore person');
+
+        // Switch button visibility
+        document.getElementById('ignore-btn').classList.add('hidden');
+        document.getElementById('unignore-btn').classList.remove('hidden');
+
+        // Update drawer title to show it's now ignored
+        state.currentPersonName = null;
+        document.getElementById('drawer-title').textContent = 'Ignored person';
+
+        // Refresh data so when drawer closes, person will be gone from grid
+        await refreshData();
+      } catch (error) {
+        console.error(error);
+        alert('Unable to ignore person. Check the console for details.');
+      }
+    }
+
+    async function unignoreCurrentPerson() {
+      if (!state.currentPersonID) return;
+
+      try {
+        const response = await fetch(`/api/persons/${state.currentPersonID}/unignore`, {
+          method: 'POST'
+        });
+        if (!response.ok) throw new Error('Failed to unignore person');
+
+        // Switch button visibility
+        document.getElementById('unignore-btn').classList.add('hidden');
+        document.getElementById('ignore-btn').classList.remove('hidden');
+
+        // Update drawer title
+        document.getElementById('drawer-title').textContent = 'Unnamed person';
+        state.currentPersonName = null;
+
+        // Refresh data so person reappears in grid
+        await refreshData();
+      } catch (error) {
+        console.error(error);
+        alert('Unable to unignore person. Check the console for details.');
       }
     }
 

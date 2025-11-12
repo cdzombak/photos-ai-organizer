@@ -285,6 +285,7 @@ public struct Person {
     public var mergedByAuto: Bool
     public var favoriteFaceID: UUID?
     public var needsReprocessing: Bool
+    public var isIgnored: Bool
 
     public init(
         id: UUID = UUID(),
@@ -296,7 +297,8 @@ public struct Person {
         clusterQuality: Float? = nil,
         mergedByAuto: Bool = false,
         favoriteFaceID: UUID? = nil,
-        needsReprocessing: Bool = false
+        needsReprocessing: Bool = false,
+        isIgnored: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -308,6 +310,7 @@ public struct Person {
         self.mergedByAuto = mergedByAuto
         self.favoriteFaceID = favoriteFaceID
         self.needsReprocessing = needsReprocessing
+        self.isIgnored = isIgnored
     }
 
     public func withName(_ name: String?) -> Person {
@@ -321,7 +324,8 @@ public struct Person {
             clusterQuality: clusterQuality,
             mergedByAuto: mergedByAuto,
             favoriteFaceID: favoriteFaceID,
-            needsReprocessing: needsReprocessing
+            needsReprocessing: needsReprocessing,
+            isIgnored: isIgnored
         )
     }
 
@@ -336,7 +340,8 @@ public struct Person {
             clusterQuality: clusterQuality,
             mergedByAuto: mergedByAuto,
             favoriteFaceID: favoriteFaceID,
-            needsReprocessing: needsReprocessing
+            needsReprocessing: needsReprocessing,
+            isIgnored: isIgnored
         )
     }
 
@@ -351,7 +356,8 @@ public struct Person {
             clusterQuality: clusterQuality,
             mergedByAuto: mergedByAuto,
             favoriteFaceID: favoriteFaceID,
-            needsReprocessing: needsReprocessing
+            needsReprocessing: needsReprocessing,
+            isIgnored: isIgnored
         )
     }
 
@@ -366,7 +372,8 @@ public struct Person {
             clusterQuality: clusterQuality,
             mergedByAuto: mergedByAuto,
             favoriteFaceID: favoriteFaceID,
-            needsReprocessing: needsReprocessing
+            needsReprocessing: needsReprocessing,
+            isIgnored: isIgnored
         )
     }
 
@@ -381,7 +388,8 @@ public struct Person {
             clusterQuality: clusterQuality,
             mergedByAuto: mergedByAuto,
             favoriteFaceID: favoriteFaceID,
-            needsReprocessing: needsReprocessing
+            needsReprocessing: needsReprocessing,
+            isIgnored: isIgnored
         )
     }
 
@@ -396,7 +404,24 @@ public struct Person {
             clusterQuality: clusterQuality,
             mergedByAuto: mergedByAuto,
             favoriteFaceID: favoriteFaceID,
-            needsReprocessing: needsReprocessing
+            needsReprocessing: needsReprocessing,
+            isIgnored: isIgnored
+        )
+    }
+
+    public func withIsIgnored(_ isIgnored: Bool) -> Person {
+        Person(
+            id: id,
+            name: name,
+            createdAt: createdAt,
+            updatedAt: Date(),
+            mergedInto: mergedInto,
+            isActive: isActive,
+            clusterQuality: clusterQuality,
+            mergedByAuto: mergedByAuto,
+            favoriteFaceID: favoriteFaceID,
+            needsReprocessing: needsReprocessing,
+            isIgnored: isIgnored
         )
     }
 }

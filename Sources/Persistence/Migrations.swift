@@ -110,6 +110,16 @@ public extension MigrationStep {
             """
         ]
     )
+
+    static let addIsIgnoredColumn = MigrationStep(
+        identifier: "007_add_is_ignored",
+        statements: [
+            """
+            ALTER TABLE persons
+            ADD COLUMN IF NOT EXISTS is_ignored BOOLEAN DEFAULT FALSE;
+            """
+        ]
+    )
 }
 
 protocol SQLCommandExecutor {
