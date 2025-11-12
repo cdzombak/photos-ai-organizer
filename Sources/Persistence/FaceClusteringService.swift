@@ -60,6 +60,12 @@ public struct FaceClusteringService {
                 // Use k-NN voting via pgvector index
                 let nearestNeighbors = try faceStore.findKNearestFaces(embedding: faceEmbedding, k: kNeighbors, connection: connection)
 
+                // Resolve merged person IDs to their final active person
+                let resolvedNeighbors = try nearestNeighbors.map { neighbor in
+                    let finalPersonID = try faceStore.resolveMergeChain(neighbor.personID, connection: connection)
+                    return (personID: finalPersonID, distance: neighbor.distance)
+                }
+
                 // Use higher threshold for faces flagged for reprocessing (1.2x)
                 let effectiveThreshold = face.useHighThresholdClustering ? similarityThreshold * 1.2 : similarityThreshold
 
@@ -67,7 +73,7 @@ public struct FaceClusteringService {
                 // pgvector <=> returns cosine distance (1 - similarity)
                 // So distance <= (1 - threshold) means similarity >= threshold
                 let maxDistance = 1.0 - effectiveThreshold
-                let validNeighbors = nearestNeighbors.filter { $0.distance <= maxDistance }
+                let validNeighbors = resolvedNeighbors.filter { $0.distance <= maxDistance }
 
                 // Try voting first for robustness
                 var assignedPersonID = voteOnPerson(from: validNeighbors, votingThreshold: votingThreshold)

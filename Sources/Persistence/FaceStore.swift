@@ -443,6 +443,39 @@ public final class FaceStore {
         return nil
     }
 
+    public func resolveMergeChain(_ personID: UUID, connection: Connection) throws -> UUID {
+        var currentID = personID
+        var visited: Set<UUID> = []
+
+        while true {
+            // Detect cycles
+            if visited.contains(currentID) {
+                // Cycle detected, return the current ID as best effort
+                return currentID
+            }
+            visited.insert(currentID)
+
+            guard let person = try getPerson(currentID, connection: connection) else {
+                // Person not found, return original ID
+                return personID
+            }
+
+            // If person is active and not merged, this is the final ID
+            if person.isActive && person.mergedInto == nil {
+                return currentID
+            }
+
+            // If merged into another person, follow the chain
+            if let mergedInto = person.mergedInto {
+                currentID = mergedInto
+                continue
+            }
+
+            // Inactive but not merged - return this ID
+            return currentID
+        }
+    }
+
     public func getAutoMergedPersons(connection: Connection) throws -> [(Person, Person)] {
         let sql = """
         SELECT
