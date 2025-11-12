@@ -309,12 +309,19 @@ public struct FaceClusteringService {
                 source = person1
             }
 
+            let sourceFaceIDs = try faceStore.getFaceIDsForPerson(source.id, connection: connection)
             try await mergePersons(
                 source.id,
                 target.id,
                 connection: connection,
                 markAuto: true,
-                reassignFaces: false
+                reassignFaces: true
+            )
+            try faceStore.recordAutoMergeEvent(
+                sourcePersonID: source.id,
+                targetPersonID: target.id,
+                faceIDs: sourceFaceIDs,
+                connection: connection
             )
             mergedSources.insert(source.id)
             mergeCount += 1
@@ -330,6 +337,15 @@ public struct FaceClusteringService {
         guard sourcePerson.mergedByAuto, sourcePerson.mergedInto != nil else {
             throw ClusteringError.mergeNotAutomatic
         }
+
+        guard let event = try faceStore.fetchLatestAutoMergeEvent(for: sourcePersonID, connection: connection) else {
+            throw ClusteringError.mergeNotAutomatic
+        }
+
+        for faceID in event.faceIDs {
+            try faceStore.assignFaceToPerson(faceID, personID: sourcePersonID, connection: connection)
+        }
+        try faceStore.deleteAutoMergeEvent(event.id, connection: connection)
 
         let restored = sourcePerson
             .withMergedInto(nil)

@@ -373,6 +373,27 @@ public final class FaceStore {
         ]
         _ = try statement.execute(parameterValues: params)
     }
+
+    public func getFaceIDsForPerson(_ personID: UUID, connection: Connection) throws -> [UUID] {
+        let sql = """
+        SELECT id
+        FROM face_detections
+        WHERE person_id = $1;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute(parameterValues: [personID.uuidString])
+        var ids: [UUID] = []
+        for row in cursor {
+            let resolved = try row.get()
+            if let idString = try resolved.columns[0].optionalString(),
+               let id = UUID(uuidString: idString) {
+                ids.append(id)
+            }
+        }
+        return ids
+    }
     
     public func getPerson(_ personID: UUID, connection: Connection) throws -> Person? {
         let sql = """
@@ -960,10 +981,103 @@ public final class FaceStore {
         _ = try statement.execute(parameterValues: [quality.map { Double($0) }, personID.uuidString])
     }
 
+    public func recordAutoMergeEvent(
+        sourcePersonID: UUID,
+        targetPersonID: UUID,
+        faceIDs: [UUID],
+        connection: Connection
+    ) throws {
+        guard !faceIDs.isEmpty else { return }
+        let eventID = UUID()
+        let insertEventSQL = """
+        INSERT INTO auto_merge_events (id, source_person_id, target_person_id)
+        VALUES ($1, $2, $3);
+        """
+        let eventStatement = try connection.prepareStatement(text: insertEventSQL)
+        defer { eventStatement.close() }
+        _ = try eventStatement.execute(parameterValues: [eventID.uuidString, sourcePersonID.uuidString, targetPersonID.uuidString])
+
+        let insertFaceSQL = """
+        INSERT INTO auto_merge_event_faces (event_id, face_id)
+        VALUES ($1, $2);
+        """
+        let faceStatement = try connection.prepareStatement(text: insertFaceSQL)
+        defer { faceStatement.close() }
+        for faceID in faceIDs {
+            _ = try faceStatement.execute(parameterValues: [eventID.uuidString, faceID.uuidString])
+        }
+    }
+
+    public func fetchLatestAutoMergeEvent(for sourcePersonID: UUID, connection: Connection) throws -> AutoMergeEvent? {
+        let sql = """
+        SELECT id, source_person_id, target_person_id
+        FROM auto_merge_events
+        WHERE source_person_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute(parameterValues: [sourcePersonID.uuidString])
+        var maybeEvent: AutoMergeEvent?
+        for row in cursor {
+            let resolved = try row.get()
+            guard let eventIDString = try resolved.columns[0].optionalString(),
+                  let eventID = UUID(uuidString: eventIDString),
+                  let storedSource = try resolved.columns[1].optionalString(),
+                  let storedSourceID = UUID(uuidString: storedSource),
+                  let targetIDString = try resolved.columns[2].optionalString(),
+                  let targetID = UUID(uuidString: targetIDString) else {
+                continue
+            }
+
+            let faceIDs = try fetchAutoMergeEventFaces(eventID: eventID, connection: connection)
+            maybeEvent = AutoMergeEvent(id: eventID, sourcePersonID: storedSourceID, targetPersonID: targetID, faceIDs: faceIDs)
+            break
+        }
+        return maybeEvent
+    }
+
+    private func fetchAutoMergeEventFaces(eventID: UUID, connection: Connection) throws -> [UUID] {
+        let sql = """
+        SELECT face_id
+        FROM auto_merge_event_faces
+        WHERE event_id = $1;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        let cursor = try statement.execute(parameterValues: [eventID.uuidString])
+        var ids: [UUID] = []
+        for row in cursor {
+            let resolved = try row.get()
+            if let idString = try resolved.columns[0].optionalString(),
+               let id = UUID(uuidString: idString) {
+                ids.append(id)
+            }
+        }
+        return ids
+    }
+
+    public func deleteAutoMergeEvent(_ eventID: UUID, connection: Connection) throws {
+        let sql = """
+        DELETE FROM auto_merge_events WHERE id = $1;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute(parameterValues: [eventID.uuidString])
+    }
 }
 
 public struct FaceProcessingStatus: Sendable {
     public let assetID: String
     public let processedAt: Date
     public let facesDetected: Int
+}
+
+public struct AutoMergeEvent {
+    public let id: UUID
+    public let sourcePersonID: UUID
+    public let targetPersonID: UUID
+    public let faceIDs: [UUID]
 }

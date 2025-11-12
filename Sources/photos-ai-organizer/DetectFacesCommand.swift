@@ -41,7 +41,16 @@ struct DetectFacesCommand: AsyncParsableCommand {
         // Run database migrations
         print("📊 Running database migrations...")
         let migrationRunner = MigrationRunner(connection: connection)
-        try migrationRunner.run([.createFaceTables, .addPersonQualityColumn, .addAutoMergeFlag, .addFavoriteFaceColumn, .addNeedsReprocessingColumn, .addHighThresholdFlag, .addIsIgnoredColumn])
+        try migrationRunner.run([
+            .createFaceTables,
+            .addPersonQualityColumn,
+            .addAutoMergeFlag,
+            .addFavoriteFaceColumn,
+            .addNeedsReprocessingColumn,
+            .addHighThresholdFlag,
+            .addIsIgnoredColumn,
+            .createAutoMergeEventTables
+        ])
         
         // Initialize services
         let faceStore = FaceStore(config: config)

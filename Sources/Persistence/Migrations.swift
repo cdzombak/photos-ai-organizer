@@ -120,6 +120,30 @@ public extension MigrationStep {
             """
         ]
     )
+
+    static let createAutoMergeEventTables = MigrationStep(
+        identifier: "008_create_auto_merge_events",
+        statements: [
+            """
+            CREATE TABLE IF NOT EXISTS auto_merge_events (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                source_person_id UUID NOT NULL REFERENCES persons(id),
+                target_person_id UUID NOT NULL REFERENCES persons(id),
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS auto_merge_event_faces (
+                event_id UUID NOT NULL REFERENCES auto_merge_events(id) ON DELETE CASCADE,
+                face_id UUID NOT NULL REFERENCES face_detections(id),
+                PRIMARY KEY (event_id, face_id)
+            );
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_auto_merge_events_source ON auto_merge_events(source_person_id);
+            """
+        ]
+    )
 }
 
 protocol SQLCommandExecutor {
