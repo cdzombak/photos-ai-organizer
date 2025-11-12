@@ -347,7 +347,8 @@ private final class FaceDataProvider: @unchecked Sendable {
                     sampleFaceID: thumbnailFaceID,
                     sampleImageURL: thumbnailFaceID.map { "/api/faces/\($0.uuidString)/thumbnail?size=160" },
                     qualityScore: person.clusterQuality,
-                    favoriteFaceID: person.favoriteFaceID
+                    favoriteFaceID: person.favoriteFaceID,
+                    needsReprocessing: person.needsReprocessing
                 ))
             }
             return summaries
@@ -505,7 +506,8 @@ private final class FaceDataProvider: @unchecked Sendable {
             sampleFaceID: thumbnailFaceID,
             sampleImageURL: thumbnailFaceID.map { "/api/faces/\($0.uuidString)/thumbnail?size=160" },
             qualityScore: person.clusterQuality,
-            favoriteFaceID: person.favoriteFaceID
+            favoriteFaceID: person.favoriteFaceID,
+            needsReprocessing: person.needsReprocessing
         )
     }
 }
@@ -654,6 +656,7 @@ private struct FacePersonSummary: Codable {
     let sampleImageURL: String?
     let qualityScore: Float?
     let favoriteFaceID: UUID?
+    let needsReprocessing: Bool
 }
 
 private struct AutoMergeSummary: Codable {
@@ -864,12 +867,30 @@ private enum FaceWebAssets {
       gap: 12px;
       position: relative;
     }
-    .card img {
+    .card-img-wrapper {
+      position: relative;
+      width: 100%;
+    }
+    .card-img-wrapper img {
       width: 100%;
       height: 180px;
       object-fit: cover;
       border-radius: 12px;
       background: #e6e6e6;
+      display: block;
+    }
+    .reprocess-badge {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: rgba(255, 149, 0, 0.95);
+      color: white;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      pointer-events: none;
     }
     .card-title-section {
       display: flex;
@@ -1422,13 +1443,27 @@ private enum FaceWebAssets {
       card.className = 'card';
       card.dataset.personId = person.id;
 
-      // Image
+      // Image with wrapper for badges
+      const imgWrapper = document.createElement('div');
+      imgWrapper.className = 'card-img-wrapper';
+
       const img = document.createElement('img');
       img.alt = person.name || 'Unnamed person';
       if (person.sampleImageURL) {
         img.src = person.sampleImageURL;
       } else {
         img.style.background = '#d8d8d8';
+      }
+
+      imgWrapper.appendChild(img);
+
+      // Add reprocessing badge if flagged
+      if (person.needsReprocessing) {
+        const badge = document.createElement('div');
+        badge.className = 'reprocess-badge';
+        badge.textContent = 'Queued for reprocessing';
+        badge.title = 'This cluster will be split and re-clustered the next time you run cluster-faces';
+        imgWrapper.appendChild(badge);
       }
 
       // Title section with inline editing
@@ -1463,7 +1498,7 @@ private enum FaceWebAssets {
       button.textContent = 'View faces';
       button.addEventListener('click', () => openDrawer(person.id, person.name || 'Person', person.faceCount));
 
-      card.append(img, titleSection, meta, button);
+      card.append(imgWrapper, titleSection, meta, button);
       return card;
     }
 
