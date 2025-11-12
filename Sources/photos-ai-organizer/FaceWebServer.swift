@@ -55,6 +55,7 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
     private let dataProvider: FaceDataProvider
     private let thumbnailProvider: FaceThumbnailProvider
     private var requestHead: HTTPRequestHead?
+    private var requestBody: ByteBuffer?
 
     init(dataProvider: FaceDataProvider, thumbnailProvider: FaceThumbnailProvider) {
         self.dataProvider = dataProvider
@@ -66,22 +67,28 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
         switch part {
         case let .head(head):
             requestHead = head
-        case .body:
-            break
+            requestBody = nil
+        case var .body(buffer):
+            if requestBody == nil {
+                requestBody = buffer
+            } else {
+                requestBody?.writeBuffer(&buffer)
+            }
         case .end:
             if let head = requestHead {
-                handleRequest(head: head, context: context)
+                handleRequest(head: head, body: requestBody, context: context)
             }
             requestHead = nil
+            requestBody = nil
         }
     }
 
-    private func handleRequest(head: HTTPRequestHead, context: ChannelHandlerContext) {
+    private func handleRequest(head: HTTPRequestHead, body: ByteBuffer?, context: ChannelHandlerContext) {
         switch head.method {
         case .GET:
             handleGET(head: head, context: context)
         case .POST:
-            handlePOST(head: head, context: context)
+            handlePOST(head: head, body: body, context: context)
         default:
             respond(status: .methodNotAllowed, context: context)
         }
@@ -134,7 +141,7 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
         }
     }
 
-    private func handlePOST(head: HTTPRequestHead, context: ChannelHandlerContext) {
+    private func handlePOST(head: HTTPRequestHead, body: ByteBuffer?, context: ChannelHandlerContext) {
         let path = head.uri.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? ""
         let pathComponents = path.split(separator: "/", omittingEmptySubsequences: true)
 
@@ -145,6 +152,21 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
                pathComponents[3] == "undo",
                let sourceID = UUID(uuidString: String(pathComponents[2])) {
                 try dataProvider.undoAutoMerge(sourcePersonID: sourceID)
+                return respond(status: .noContent, context: context)
+            } else if pathComponents.count == 4,
+                      pathComponents[0] == "api",
+                      pathComponents[1] == "persons",
+                      pathComponents[3] == "name",
+                      let personID = UUID(uuidString: String(pathComponents[2])) {
+                guard var body = body,
+                      let bytes = body.readBytes(length: body.readableBytes) else {
+                    return respond(status: .badRequest, context: context)
+                }
+                let data = Data(bytes)
+                guard let json = try? JSONDecoder().decode(UpdateNameRequest.self, from: data) else {
+                    return respond(status: .badRequest, context: context)
+                }
+                try dataProvider.updatePersonName(personID: personID, name: json.name)
                 return respond(status: .noContent, context: context)
             } else {
                 return respond(status: .notFound, context: context)
@@ -219,6 +241,11 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
 }
 
 // MARK: - Data Provider
+
+enum FaceDataError: Error {
+    case personNotFound
+    case invalidRequest
+}
 
 private final class FaceDataProvider: @unchecked Sendable {
     private let config: PostgresConfig
@@ -312,6 +339,16 @@ private final class FaceDataProvider: @unchecked Sendable {
                 similarityThreshold: similarityThreshold
             )
             try service.undoAutoMerge(sourcePersonID, connection: connection)
+        }
+    }
+
+    func updatePersonName(personID: UUID, name: String?) throws {
+        try withConnection { connection in
+            guard let person = try faceStore.getPerson(personID, connection: connection) else {
+                throw FaceDataError.personNotFound
+            }
+            let updatedPerson = person.withName(name)
+            try faceStore.savePerson(updatedPerson, connection: connection)
         }
     }
 
@@ -469,7 +506,11 @@ private final class FaceThumbnailProvider: @unchecked Sendable {
     }
 }
 
-// MARK: - Response Models
+// MARK: - Request/Response Models
+
+private struct UpdateNameRequest: Codable {
+    let name: String?
+}
 
 private struct FacePersonSummary: Codable {
     let id: UUID
@@ -537,6 +578,10 @@ private enum FaceWebAssets {
             <p class=\"subtitle\">Review detected persons</p>
           </div>
           <div class=\"sort-controls\">
+            <label>
+              <input type=\"checkbox\" id=\"unnamed-only\" />
+              Unnamed only
+            </label>
             <label for=\"sort-mode\">Sort by</label>
             <select id=\"sort-mode\">
               <option value=\"created\" selected>Recently added</option>
@@ -561,8 +606,13 @@ private enum FaceWebAssets {
         </main>
         <div id=\"drawer\" class=\"drawer hidden\">
           <div class=\"drawer-header\">
-            <div>
-              <h2 id=\"drawer-title\"></h2>
+            <div class=\"drawer-title-section\">
+              <div class=\"name-editor\">
+                <h2 id=\"drawer-title\" class=\"editable-title\"></h2>
+                <input type=\"text\" id=\"name-input\" class=\"name-input hidden\" placeholder=\"Enter name\" />
+                <button id=\"edit-name-btn\" class=\"edit-btn\" aria-label=\"Edit name\">✎</button>
+                <span id=\"save-status\" class=\"save-status\"></span>
+              </div>
               <p id=\"drawer-meta\"></p>
             </div>
             <button id=\"drawer-close\" aria-label=\"Close\">&times;</button>
@@ -686,9 +736,42 @@ private enum FaceWebAssets {
       border-radius: 12px;
       background: #e6e6e6;
     }
+    .card-title-section {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 28px;
+    }
     .card h3 {
       margin: 0;
       font-size: 1.1rem;
+      cursor: pointer;
+      user-select: none;
+      flex: 1;
+      transition: color 0.15s;
+      min-width: 0;
+      word-break: break-word;
+    }
+    .card h3:hover {
+      color: #0057ff;
+    }
+    .card .card-name-input {
+      flex: 1;
+      font-size: 1.1rem;
+      font-weight: 600;
+      padding: 4px 8px;
+      border: 2px solid #0057ff;
+      border-radius: 6px;
+      background: var(--card-bg);
+      color: var(--text);
+      font-family: inherit;
+      min-width: 0;
+    }
+    .card .card-save-status {
+      font-size: 0.75rem;
+      color: rgba(0,0,0,0.5);
+      font-style: italic;
+      white-space: nowrap;
     }
     .meta {
       font-size: 0.9rem;
@@ -696,7 +779,7 @@ private enum FaceWebAssets {
       display: flex;
       justify-content: space-between;
     }
-    .card button {
+    .card button.view-btn {
       border: none;
       background: #0057ff;
       color: white;
@@ -708,8 +791,18 @@ private enum FaceWebAssets {
     .sort-controls {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 16px;
       margin-left: auto;
+    }
+    .sort-controls label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .sort-controls input[type="checkbox"] {
+      cursor: pointer;
     }
     .sort-controls select {
       border: 1px solid var(--border);
@@ -717,6 +810,7 @@ private enum FaceWebAssets {
       padding: 6px 12px;
       border-radius: 999px;
       font-weight: 600;
+      cursor: pointer;
     }
     .view { display: block; }
     .empty {
@@ -751,12 +845,64 @@ private enum FaceWebAssets {
       align-items: flex-start;
       gap: 16px;
     }
+    .drawer-title-section {
+      flex: 1;
+      min-width: 0;
+    }
+    .name-editor {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .editable-title {
+      margin: 0;
+      cursor: pointer;
+      user-select: none;
+      transition: color 0.15s;
+    }
+    .editable-title:hover {
+      color: #0057ff;
+    }
+    .name-input {
+      font-size: 1.5rem;
+      font-weight: 600;
+      padding: 4px 8px;
+      border: 2px solid #0057ff;
+      border-radius: 6px;
+      background: var(--card-bg);
+      color: var(--text);
+      flex: 1;
+      min-width: 180px;
+      font-family: inherit;
+    }
+    .edit-btn {
+      border: none;
+      background: transparent;
+      font-size: 1.2rem;
+      cursor: pointer;
+      padding: 4px 8px;
+      opacity: 0.6;
+      transition: opacity 0.15s;
+    }
+    .edit-btn:hover {
+      opacity: 1;
+    }
+    .save-status {
+      font-size: 0.85rem;
+      color: rgba(0,0,0,0.5);
+      font-style: italic;
+    }
+    .hidden {
+      display: none !important;
+    }
     #drawer-close {
       border: none;
       background: transparent;
       font-size: 2rem;
       line-height: 1;
       cursor: pointer;
+      flex-shrink: 0;
     }
     .face-grid {
       display: grid;
@@ -789,11 +935,17 @@ private enum FaceWebAssets {
       autoMerges: [],
       facesCache: new Map(),
       sortMode: 'created',
+      unnamedOnly: false,
+      currentPersonID: null,
+      currentPersonName: null,
+      isEditingName: false,
     };
 
     document.addEventListener('DOMContentLoaded', () => {
       setupSortControls();
       setupDrawer();
+      setupNameEditor();
+      setupKeyboardShortcuts();
       refreshData();
     });
 
@@ -803,14 +955,153 @@ private enum FaceWebAssets {
         state.sortMode = select.value;
         renderPersons();
       });
+
+      const unnamedCheckbox = document.getElementById('unnamed-only');
+      unnamedCheckbox.addEventListener('change', () => {
+        state.unnamedOnly = unnamedCheckbox.checked;
+        renderPersons();
+      });
     }
 
     function setupDrawer() {
       document.getElementById('drawer-close').addEventListener('click', closeDrawer);
     }
 
+    function setupNameEditor() {
+      const title = document.getElementById('drawer-title');
+      const input = document.getElementById('name-input');
+      const editBtn = document.getElementById('edit-name-btn');
+
+      title.addEventListener('click', enterEditMode);
+      editBtn.addEventListener('click', enterEditMode);
+
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          saveName();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelEdit();
+        }
+      });
+
+      input.addEventListener('blur', () => {
+        if (state.isEditingName) {
+          saveName();
+        }
+      });
+    }
+
+    function setupKeyboardShortcuts() {
+      document.addEventListener('keydown', (e) => {
+        if (state.isEditingName) return;
+        const drawer = document.getElementById('drawer');
+        if (drawer.classList.contains('hidden')) return;
+
+        if (e.key === 'n' || e.key === 'ArrowRight') {
+          e.preventDefault();
+          navigateToNextPerson();
+        } else if (e.key === 'p' || e.key === 'ArrowLeft') {
+          e.preventDefault();
+          navigateToPreviousPerson();
+        } else if (e.key === 'e') {
+          e.preventDefault();
+          enterEditMode();
+        }
+      });
+    }
+
     function closeDrawer() {
       document.getElementById('drawer').classList.add('hidden');
+      state.currentPersonID = null;
+      state.currentPersonName = null;
+    }
+
+    function enterEditMode() {
+      if (state.currentPersonID === null) return;
+      state.isEditingName = true;
+      const title = document.getElementById('drawer-title');
+      const input = document.getElementById('name-input');
+      const editBtn = document.getElementById('edit-name-btn');
+
+      title.classList.add('hidden');
+      editBtn.classList.add('hidden');
+      input.classList.remove('hidden');
+      input.value = state.currentPersonName || '';
+      input.focus();
+      input.select();
+    }
+
+    function cancelEdit() {
+      state.isEditingName = false;
+      const title = document.getElementById('drawer-title');
+      const input = document.getElementById('name-input');
+      const editBtn = document.getElementById('edit-name-btn');
+
+      title.classList.remove('hidden');
+      editBtn.classList.remove('hidden');
+      input.classList.add('hidden');
+    }
+
+    async function saveName() {
+      if (state.currentPersonID === null) return;
+      const input = document.getElementById('name-input');
+      const newName = input.value.trim() || null;
+
+      if (newName === state.currentPersonName) {
+        cancelEdit();
+        return;
+      }
+
+      const statusEl = document.getElementById('save-status');
+      statusEl.textContent = 'Saving...';
+
+      try {
+        const response = await fetch(`/api/persons/${state.currentPersonID}/name`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName })
+        });
+
+        if (!response.ok) throw new Error('Failed to save name');
+
+        state.currentPersonName = newName;
+        document.getElementById('drawer-title').textContent = newName || 'Unnamed person';
+        statusEl.textContent = 'Saved';
+        setTimeout(() => { statusEl.textContent = ''; }, 2000);
+
+        const person = state.persons.find((p) => p.id === state.currentPersonID);
+        if (person) {
+          person.name = newName;
+          renderPersons();
+        }
+      } catch (error) {
+        console.error(error);
+        statusEl.textContent = 'Failed to save';
+        setTimeout(() => { statusEl.textContent = ''; }, 3000);
+      } finally {
+        cancelEdit();
+      }
+    }
+
+    function navigateToNextPerson() {
+      if (!state.currentPersonID) return;
+      const sorted = sortPersons([...state.persons]);
+      const filtered = sorted.filter((p) => (p.faceCount ?? 0) > 1);
+      const currentIndex = filtered.findIndex((p) => p.id === state.currentPersonID);
+      if (currentIndex === -1 || currentIndex >= filtered.length - 1) return;
+      const nextPerson = filtered[currentIndex + 1];
+      openDrawer(nextPerson.id, nextPerson.name || 'Person', nextPerson.faceCount);
+    }
+
+    function navigateToPreviousPerson() {
+      if (!state.currentPersonID) return;
+      const sorted = sortPersons([...state.persons]);
+      const filtered = sorted.filter((p) => (p.faceCount ?? 0) > 1);
+      const currentIndex = filtered.findIndex((p) => p.id === state.currentPersonID);
+      if (currentIndex <= 0) return;
+      const prevPerson = filtered[currentIndex - 1];
+      openDrawer(prevPerson.id, prevPerson.name || 'Person', prevPerson.faceCount);
     }
 
     async function refreshData() {
@@ -851,20 +1142,19 @@ private enum FaceWebAssets {
         return;
       }
       const sorted = sortPersons([...state.persons]);
-      const filtered = sorted.filter((person) => (person.faceCount ?? 0) > 1);
+      let filtered = sorted.filter((person) => (person.faceCount ?? 0) > 1);
+
+      if (state.unnamedOnly) {
+        filtered = filtered.filter((person) => !person.name);
+      }
+
       if (filtered.length === 0) {
-        empty.textContent = 'No multi-face persons available.';
+        empty.textContent = state.unnamedOnly ? 'No unnamed persons found.' : 'No multi-face persons available.';
         empty.style.display = 'block';
         return;
       }
       filtered.forEach((person) => {
-        grid.appendChild(createCard({
-          title: person.name || 'Unnamed person',
-          subtitle: `${person.faceCount} face${person.faceCount === 1 ? '' : 's'}`,
-          image: person.sampleImageURL,
-          actionLabel: 'View faces',
-          onClick: () => openDrawer(person.id, person.name || 'Person', person.faceCount)
-        }));
+        grid.appendChild(createCard(person));
       });
     }
 
@@ -901,27 +1191,166 @@ private enum FaceWebAssets {
       return person.qualityScore;
     }
 
-    function createCard({ title, subtitle, image, actionLabel, onClick }) {
+    function createCard(person) {
       const card = document.createElement('article');
       card.className = 'card';
+      card.dataset.personId = person.id;
+
+      // Image
       const img = document.createElement('img');
-      img.alt = title;
-      if (image) {
-        img.src = image;
+      img.alt = person.name || 'Unnamed person';
+      if (person.sampleImageURL) {
+        img.src = person.sampleImageURL;
       } else {
         img.style.background = '#d8d8d8';
       }
+
+      // Title section with inline editing
+      const titleSection = document.createElement('div');
+      titleSection.className = 'card-title-section';
+
       const heading = document.createElement('h3');
-      heading.textContent = title;
+      heading.className = 'card-title';
+      heading.textContent = person.name || 'Unnamed person';
+      heading.addEventListener('click', () => enterCardEditMode(card, person));
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'card-name-input hidden';
+      input.placeholder = 'Enter name';
+      input.dataset.originalName = person.name || '';
+
+      const saveStatus = document.createElement('span');
+      saveStatus.className = 'card-save-status';
+
+      titleSection.append(heading, input, saveStatus);
+
+      // Meta
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = subtitle;
+      meta.textContent = `${person.faceCount} face${person.faceCount === 1 ? '' : 's'}`;
+
+      // View button
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = actionLabel;
-      button.addEventListener('click', onClick);
-      card.append(img, heading, meta, button);
+      button.className = 'view-btn';
+      button.textContent = 'View faces';
+      button.addEventListener('click', () => openDrawer(person.id, person.name || 'Person', person.faceCount));
+
+      card.append(img, titleSection, meta, button);
       return card;
+    }
+
+    function enterCardEditMode(card, person) {
+      const heading = card.querySelector('.card-title');
+      const input = card.querySelector('.card-name-input');
+
+      heading.classList.add('hidden');
+      input.classList.remove('hidden');
+      input.value = person.name || '';
+      input.focus();
+      input.select();
+
+      const handleSave = async () => {
+        await saveCardName(card, person);
+      };
+
+      const handleCancel = () => {
+        cancelCardEdit(card);
+      };
+
+      const handleKeyDown = (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          handleSave();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          handleCancel();
+        } else if (e.key === 'Tab') {
+          e.preventDefault();
+          handleSave().then(() => {
+            if (e.shiftKey) {
+              focusPreviousCard(card);
+            } else {
+              focusNextCard(card);
+            }
+          });
+        }
+      };
+
+      input.addEventListener('keydown', handleKeyDown, { once: false });
+      input.addEventListener('blur', handleSave, { once: true });
+    }
+
+    async function saveCardName(card, person) {
+      const heading = card.querySelector('.card-title');
+      const input = card.querySelector('.card-name-input');
+      const saveStatus = card.querySelector('.card-save-status');
+      const newName = input.value.trim() || null;
+
+      if (newName === person.name) {
+        cancelCardEdit(card);
+        return;
+      }
+
+      saveStatus.textContent = 'Saving...';
+
+      try {
+        const response = await fetch(`/api/persons/${person.id}/name`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName })
+        });
+
+        if (!response.ok) throw new Error('Failed to save name');
+
+        person.name = newName;
+        heading.textContent = newName || 'Unnamed person';
+        saveStatus.textContent = 'Saved';
+        setTimeout(() => { saveStatus.textContent = ''; }, 2000);
+      } catch (error) {
+        console.error(error);
+        saveStatus.textContent = 'Failed';
+        setTimeout(() => { saveStatus.textContent = ''; }, 3000);
+      } finally {
+        heading.classList.remove('hidden');
+        input.classList.add('hidden');
+      }
+    }
+
+    function cancelCardEdit(card) {
+      const heading = card.querySelector('.card-title');
+      const input = card.querySelector('.card-name-input');
+      heading.classList.remove('hidden');
+      input.classList.add('hidden');
+    }
+
+    function focusNextCard(currentCard) {
+      const grid = document.getElementById('persons-grid');
+      const cards = Array.from(grid.querySelectorAll('.card'));
+      const currentIndex = cards.indexOf(currentCard);
+      if (currentIndex < cards.length - 1) {
+        const nextCard = cards[currentIndex + 1];
+        const personId = nextCard.dataset.personId;
+        const person = state.persons.find((p) => p.id === personId);
+        if (person) {
+          enterCardEditMode(nextCard, person);
+        }
+      }
+    }
+
+    function focusPreviousCard(currentCard) {
+      const grid = document.getElementById('persons-grid');
+      const cards = Array.from(grid.querySelectorAll('.card'));
+      const currentIndex = cards.indexOf(currentCard);
+      if (currentIndex > 0) {
+        const prevCard = cards[currentIndex - 1];
+        const personId = prevCard.dataset.personId;
+        const person = state.persons.find((p) => p.id === personId);
+        if (person) {
+          enterCardEditMode(prevCard, person);
+        }
+      }
     }
 
     function createMergeCard(merge) {
@@ -992,9 +1421,17 @@ private enum FaceWebAssets {
     }
 
     async function openDrawer(id, label, faceCount) {
+      state.currentPersonID = id;
+      state.currentPersonName = label === 'Person' || label === 'Unnamed person' ? null : label;
+      state.isEditingName = false;
+
       const drawer = document.getElementById('drawer');
       drawer.classList.remove('hidden');
       document.getElementById('drawer-title').textContent = label;
+      document.getElementById('drawer-title').classList.remove('hidden');
+      document.getElementById('name-input').classList.add('hidden');
+      document.getElementById('edit-name-btn').classList.remove('hidden');
+      document.getElementById('save-status').textContent = '';
       document.getElementById('drawer-meta').textContent = `${faceCount} face${faceCount === 1 ? '' : 's'}`;
       const content = document.getElementById('drawer-content');
       const empty = document.getElementById('drawer-empty');
