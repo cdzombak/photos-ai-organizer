@@ -14,6 +14,9 @@ struct ClusterFacesCommand: AsyncParsableCommand {
     @Option(name: [.short, .customLong("config"), .customLong("config-path")], help: "Path to configuration file")
     var configPath: String = "photos-config.yml"
 
+    @Flag(name: .long, help: "Delete unnamed unmerged persons and recluster their faces")
+    var retryUnnamed: Bool = false
+
     func run() async throws {
         print("🔄 Starting face clustering pipeline...")
 
@@ -38,6 +41,13 @@ struct ClusterFacesCommand: AsyncParsableCommand {
             recognitionService: recognitionService,
             similarityThreshold: similarityThreshold
         )
+
+        // Reset unnamed unmerged persons if requested
+        if retryUnnamed {
+            print("🔄 Resetting unnamed unmerged persons...")
+            let resetCount = try faceStore.resetUnnamedUnmergedPersons(connection: connection)
+            print("   ✅ Reset \(resetCount) unnamed unmerged persons")
+        }
 
         // Execute clustering
         let newPersons = try await clusteringService.clusterUnmatchedFaces(connection: connection)

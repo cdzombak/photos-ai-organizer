@@ -517,7 +517,56 @@ public final class FaceStore {
 
         return persons
     }
-    
+
+    public func resetUnnamedUnmergedPersons(connection: Connection) throws -> Int {
+        // Count persons to be reset
+        let countSQL = """
+        SELECT COUNT(*) FROM persons
+        WHERE name IS NULL
+          AND merged_into IS NULL
+          AND is_active = true;
+        """
+        let countStatement = try connection.prepareStatement(text: countSQL)
+        defer { countStatement.close() }
+
+        let cursor = try countStatement.execute()
+        var count = 0
+        for row in cursor {
+            let resolved = try row.get()
+            count = (try? resolved.columns[0].optionalInt()) ?? 0
+        }
+
+        guard count > 0 else { return 0 }
+
+        // Reset face assignments for unnamed unmerged persons
+        let resetSQL = """
+        UPDATE face_detections
+        SET person_id = NULL
+        WHERE person_id IN (
+            SELECT id FROM persons
+            WHERE name IS NULL
+              AND merged_into IS NULL
+              AND is_active = true
+        );
+        """
+        let resetStatement = try connection.prepareStatement(text: resetSQL)
+        defer { resetStatement.close() }
+        _ = try resetStatement.execute()
+
+        // Delete the persons
+        let deleteSQL = """
+        DELETE FROM persons
+        WHERE name IS NULL
+          AND merged_into IS NULL
+          AND is_active = true;
+        """
+        let deleteStatement = try connection.prepareStatement(text: deleteSQL)
+        defer { deleteStatement.close() }
+        _ = try deleteStatement.execute()
+
+        return count
+    }
+
     public func getFaceDetectionsForAsset(_ assetID: String, connection: Connection) throws -> [FaceDetection] {
         let sql = """
         SELECT id, asset_id, person_id, bounding_x, bounding_y, 
