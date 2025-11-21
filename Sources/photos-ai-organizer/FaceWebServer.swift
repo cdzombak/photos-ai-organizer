@@ -393,7 +393,13 @@ private final class FaceDataProvider: @unchecked Sendable {
                 includeMergedDescendants: includeMerged,
                 connection: connection
             )
-            return faces.prefix(50).map { FacePreview(face: $0) }
+            let sorted = faces.sorted { lhs, rhs in
+                if lhs.confidence == rhs.confidence {
+                    return lhs.createdAt > rhs.createdAt
+                }
+                return lhs.confidence > rhs.confidence
+            }
+            return sorted.map { FacePreview(face: $0) }
         }
     }
 
