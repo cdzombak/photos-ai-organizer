@@ -57,6 +57,11 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
     private var requestHead: HTTPRequestHead?
     private var requestBody: ByteBuffer?
 
+    private final class ContextBox: @unchecked Sendable {
+        let context: ChannelHandlerContext
+        init(_ context: ChannelHandlerContext) { self.context = context }
+    }
+
     init(dataProvider: FaceDataProvider, thumbnailProvider: FaceThumbnailProvider) {
         self.dataProvider = dataProvider
         self.thumbnailProvider = thumbnailProvider
@@ -172,14 +177,16 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
                     return respond(status: .badRequest, context: context)
                 }
                 let eventLoop = context.eventLoop
+                let ctxBox = ContextBox(context)
                 let promise = eventLoop.makePromise(of: Void.self)
                 promise.futureResult.whenComplete { result in
+                    let ctx = ctxBox.context
                     switch result {
                     case .success:
-                        self.respond(status: .noContent, context: context)
+                        self.respond(status: .noContent, context: ctx)
                     case .failure(let error):
                         print("FaceHTTPHandler error: \(error)")
-                        self.respond(status: .internalServerError, context: context)
+                        self.respond(status: .internalServerError, context: ctx)
                     }
                 }
                 Task {
