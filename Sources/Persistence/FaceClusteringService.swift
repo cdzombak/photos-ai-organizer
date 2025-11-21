@@ -433,28 +433,19 @@ public struct FaceClusteringService {
             includeMergedDescendants: true,
             connection: connection
         )
-        guard faces.count >= 2 else { return 1.0 }
-        
-        var totalSimilarity: Float = 0.0
-        var comparisonCount = 0
-        
-        // Compare each face with every other face
-        for i in 0..<faces.count {
-            for j in (i+1)..<faces.count {
-                guard let embedding1 = faces[i].faceEmbedding,
-                      let embedding2 = faces[j].faceEmbedding else {
-                    continue
-                }
-                
-                let similarity = recognitionService.compareFaces(embedding1, embedding2)
-                totalSimilarity += similarity
-                comparisonCount += 1
-            }
+        let embeddings = faces.compactMap { $0.faceEmbedding }
+        guard embeddings.count >= 2 else { return 1.0 }
+
+        // Compute centroid once, then average similarity to centroid.
+        guard let centroid = makeCentroid(from: embeddings)?.vector else { return 0.0 }
+        var total: Float = 0
+        var count = 0
+        for embedding in embeddings {
+            total += recognitionService.compareFaces(embedding, centroid)
+            count += 1
         }
-        
-        guard comparisonCount > 0 else { return 0.0 }
-        
-        return totalSimilarity / Float(comparisonCount)
+        guard count > 0 else { return 0.0 }
+        return total / Float(count)
     }
     
     // MARK: - Helper Methods
