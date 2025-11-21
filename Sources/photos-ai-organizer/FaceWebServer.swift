@@ -1984,6 +1984,12 @@ private enum FaceWebAssets {
         if (state.faceSortMode === 'time') {
           return new Date(b.createdAt) - new Date(a.createdAt);
         }
+        if (state.faceSortMode === 'low-confidence') {
+          if (a.confidence === b.confidence) {
+            return new Date(a.createdAt) - new Date(b.createdAt);
+          }
+          return a.confidence - b.confidence;
+        }
         // default: confidence
         if (b.confidence === a.confidence) {
           return new Date(b.createdAt) - new Date(a.createdAt);
