@@ -66,8 +66,8 @@ public struct FaceClusteringService {
                     return (personID: finalPersonID, distance: neighbor.distance)
                 }
 
-                // Use higher threshold for faces flagged for reprocessing (1.2x)
-                let effectiveThreshold = face.useHighThresholdClustering ? similarityThreshold * 1.2 : similarityThreshold
+                // Use higher threshold for faces flagged for reprocessing (1.3x)
+                let effectiveThreshold = face.useHighThresholdClustering ? similarityThreshold * 1.3 : similarityThreshold
 
                 // Filter neighbors by similarity threshold
                 // pgvector <=> returns cosine distance (1 - similarity)
@@ -301,7 +301,7 @@ public struct FaceClusteringService {
     }
 
     public func mergeDuplicatePersonsAutomatically(connection: Connection) async throws -> Int {
-        let mergeThreshold = min(1.0, similarityThreshold * 1.2)
+        let mergeThreshold = min(1.0, similarityThreshold * 1.3)
         print("   🔍 Searching for duplicate persons to merge...")
         let candidates = try await findPotentialDuplicates(connection: connection)
         print("   📋 Found \(candidates.count) potential duplicate pairs")

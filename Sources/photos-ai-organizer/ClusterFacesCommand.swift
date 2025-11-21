@@ -101,13 +101,6 @@ struct ClusterFacesCommand: AsyncParsableCommand {
         let newPersons = try await clusteringService.clusterUnmatchedFaces(connection: connection)
         print("✅ Created \(newPersons.count) new persons from clustering")
 
-        let mergedCount = try await clusteringService.mergeDuplicatePersonsAutomatically(connection: connection)
-        if mergedCount > 0 {
-            print("🔗 Merged \(mergedCount) duplicate person pairs")
-        } else {
-            print("🔗 No duplicate person pairs met the merge threshold")
-        }
-
         await printClusterQualityStats(clusteringService: clusteringService, faceStore: faceStore, connection: connection)
         print("\n🎉 Face clustering pipeline completed successfully!")
     }
