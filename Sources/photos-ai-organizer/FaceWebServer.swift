@@ -1122,7 +1122,7 @@ private enum FaceWebAssets {
     .assign-suggestions { max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
     .assign-suggestions .suggestion { padding: 8px 10px; cursor: pointer; }
     .assign-suggestions .suggestion:hover, .assign-suggestions .suggestion.selected { background: rgba(0,0,0,0.05); }
-.drawer {
+    .drawer {
       position: fixed;
       top: 0;
       right: 0;
