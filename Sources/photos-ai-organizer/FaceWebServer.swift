@@ -781,6 +781,11 @@ private enum FaceWebAssets {
               </div>
               <p id=\"drawer-meta\"></p>
               <div class=\"drawer-actions\">
+                <label for=\"face-sort-mode\">Sort faces</label>
+                <select id=\"face-sort-mode\">
+                  <option value=\"confidence\" selected>Highest confidence</option>
+                  <option value=\"time\">Most recent</option>
+                </select>
                 <button id=\"reprocess-btn\" class=\"reprocess-btn\" title=\"Flag for reprocessing with higher threshold\">Reprocess cluster</button>
                 <button id=\"ignore-btn\" class=\"ignore-btn\" title=\"Hide this person from the UI\">Ignore person</button>
                 <button id=\"unignore-btn\" class=\"unignore-btn hidden\" title=\"Restore this person to the UI\">Undo ignore</button>
@@ -1021,7 +1026,7 @@ private enum FaceWebAssets {
       position: fixed;
       top: 0;
       right: 0;
-      width: min(480px, 100%);
+      width: min(640px, 50vw);
       height: 100vh;
       background: #fff;
       box-shadow: -4px 0 24px rgba(0,0,0,0.15);
@@ -1917,6 +1922,7 @@ private enum FaceWebAssets {
       document.getElementById('save-status').textContent = '';
       const totalFaces = summary.faceCount ?? faceCount ?? 0;
       document.getElementById('drawer-meta').textContent = `${totalFaces} face${totalFaces === 1 ? '' : 's'}`;
+      document.getElementById('face-sort-mode').value = state.faceSortMode || 'confidence';
       const ignoreBtn = document.getElementById('ignore-btn');
       const unignoreBtn = document.getElementById('unignore-btn');
       if (isIgnored) {
@@ -1962,7 +1968,17 @@ private enum FaceWebAssets {
         return;
       }
       empty.style.display = 'none';
-      faces.forEach((face) => {
+      const sorted = [...faces].sort((a, b) => {
+        if (state.faceSortMode === 'time') {
+          return new Date(b.createdAt) - new Date(a.createdAt);
+        }
+        // default: confidence
+        if (b.confidence === a.confidence) {
+          return new Date(b.createdAt) - new Date(a.createdAt);
+        }
+        return b.confidence - a.confidence;
+      });
+      sorted.forEach((face) => {
         const wrapper = document.createElement('div');
         wrapper.className = 'face-thumbnail-wrapper';
         if (face.id === state.currentFavoriteFaceID) {
@@ -1995,6 +2011,13 @@ private enum FaceWebAssets {
         content.appendChild(wrapper);
       });
     }
+    document.getElementById('face-sort-mode').addEventListener('change', (e) => {
+      state.faceSortMode = e.target.value;
+      const cacheKey = `person:${state.currentPersonID}`;
+      if (state.facesCache.has(cacheKey)) {
+        renderFaces(state.facesCache.get(cacheKey));
+      }
+    });
 
     async function setFavoriteFace(personID, faceID) {
       try {
