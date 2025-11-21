@@ -558,18 +558,29 @@ private final class FaceDataProvider: @unchecked Sendable {
 
 private final class FaceThumbnailProvider: @unchecked Sendable {
     private let photoLibrary: PhotoLibraryAdapter
-    private let cache = NSCache<NSString, NSData>()
+    private let memoryCache = NSCache<NSString, NSData>()
+    private let diskCacheURL: URL
 
     init(photoLibrary: PhotoLibraryAdapter) {
         self.photoLibrary = photoLibrary
-        cache.totalCostLimit = 25 * 1024 * 1024 // ~25MB
-        cache.countLimit = 512
+        memoryCache.totalCostLimit = 25 * 1024 * 1024 // ~25MB
+        memoryCache.countLimit = 512
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let dir = caches.appendingPathComponent("photos-ai-organizer/faces", isDirectory: true)
+        self.diskCacheURL = dir
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
     }
 
     func thumbnailData(for detection: FaceDetection, maxDimension: Int) -> Data? {
         let key = "\(detection.id.uuidString)-\(maxDimension)" as NSString
-        if let cached = cache.object(forKey: key) {
+        if let cached = memoryCache.object(forKey: key) {
             return cached as Data
+        }
+
+        let diskPath = diskCacheURL.appendingPathComponent(key as String)
+        if let data = try? Data(contentsOf: diskPath) {
+            memoryCache.setObject(data as NSData, forKey: key, cost: data.count)
+            return data
         }
 
         let assets = photoLibrary.fetchAssets(with: [detection.assetID])
@@ -594,7 +605,8 @@ private final class FaceThumbnailProvider: @unchecked Sendable {
 
         let scaled = scaleImage(cropped, maxDimension: CGFloat(maxDimension)) ?? cropped
         guard let jpegData = makeJPEG(from: scaled) else { return nil }
-        cache.setObject(jpegData as NSData, forKey: key, cost: jpegData.count)
+        memoryCache.setObject(jpegData as NSData, forKey: key, cost: jpegData.count)
+        try? jpegData.write(to: diskPath, options: .atomic)
         return jpegData
     }
 
