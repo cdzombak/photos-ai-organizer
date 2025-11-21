@@ -110,9 +110,6 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
             } else if path == "/api/persons" {
                 let persons = try dataProvider.fetchPersonSummaries()
                 return respondJSON(persons, context: context)
-            } else if path == "/api/auto-merges" {
-                let merges = try dataProvider.fetchAutoMerges()
-                return respondJSON(merges, context: context)
             } else if pathComponents.count == 4,
                       pathComponents[0] == "api",
                       pathComponents[1] == "persons",
@@ -147,13 +144,6 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
 
         do {
             if pathComponents.count == 4,
-               pathComponents[0] == "api",
-               pathComponents[1] == "auto-merges",
-               pathComponents[3] == "undo",
-               let sourceID = UUID(uuidString: String(pathComponents[2])) {
-                try dataProvider.undoAutoMerge(sourcePersonID: sourceID)
-                return respond(status: .noContent, context: context)
-            } else if pathComponents.count == 4,
                       pathComponents[0] == "api",
                       pathComponents[1] == "persons",
                       pathComponents[3] == "name",
@@ -243,6 +233,13 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
                       pathComponents[3] == "unignore",
                       let personID = UUID(uuidString: String(pathComponents[2])) {
                 try dataProvider.unignorePerson(personID: personID)
+                return respond(status: .noContent, context: context)
+            } else if pathComponents.count == 4,
+                      pathComponents[0] == "api",
+                      pathComponents[1] == "faces",
+                      pathComponents[3] == "unassign",
+                      let faceID = UUID(uuidString: String(pathComponents[2])) {
+                try dataProvider.unassignFace(faceID: faceID)
                 return respond(status: .noContent, context: context)
             } else {
                 return respond(status: .notFound, context: context)
@@ -362,7 +359,8 @@ private final class FaceDataProvider: @unchecked Sendable {
                     sampleImageURL: thumbnailFaceID.map { "/api/faces/\($0.uuidString)/thumbnail?size=160" },
                     qualityScore: person.clusterQuality,
                     favoriteFaceID: person.favoriteFaceID,
-                    needsReprocessing: person.needsReprocessing
+                    needsReprocessing: person.needsReprocessing,
+                    isIgnored: person.isIgnored
                 ))
             }
             return summaries
@@ -371,8 +369,25 @@ private final class FaceDataProvider: @unchecked Sendable {
 
     func fetchFaces(forPerson id: UUID) throws -> [FacePreview] {
         try withConnection { connection in
-            let person = try faceStore.getPerson(id, connection: connection)
-            let includeMerged = person?.isActive == true
+            guard let person = try faceStore.getPerson(id, connection: connection) else {
+                return []
+            }
+
+            // Special case: if this is a merged source person, fetch faces from the auto_merge_event
+            if person.mergedByAuto, person.mergedInto != nil {
+                if let event = try faceStore.fetchLatestAutoMergeEvent(for: id, connection: connection) {
+                    var faces: [FaceDetection] = []
+                    for faceID in event.faceIDs.prefix(50) {
+                        if let face = try faceStore.getFaceDetection(faceID, connection: connection) {
+                            faces.append(face)
+                        }
+                    }
+                    return faces.map { FacePreview(face: $0) }
+                }
+            }
+
+            // Normal case: fetch faces by person ID
+            let includeMerged = person.isActive
             let faces = try faceStore.getFacesForPerson(
                 id,
                 includeMergedDescendants: includeMerged,
@@ -385,40 +400,6 @@ private final class FaceDataProvider: @unchecked Sendable {
     func fetchFaceDetection(by id: UUID) throws -> FaceDetection? {
         try withConnection { connection in
             try faceStore.getFaceDetection(id, connection: connection)
-        }
-    }
-
-    func fetchAutoMerges() throws -> [AutoMergeSummary] {
-        try withConnection { connection in
-            let pairs = try faceStore.getAutoMergedPersons(connection: connection)
-            var summaries: [AutoMergeSummary] = []
-            summaries.reserveCapacity(pairs.count)
-            for (source, target) in pairs {
-                guard let sourceSummary = try makeSummary(
-                    for: source,
-                    includeMergedDescendants: false,
-                    connection: connection
-                ), let targetSummary = try makeSummary(
-                    for: target,
-                    includeMergedDescendants: true,
-                    connection: connection
-                ) else {
-                    continue
-                }
-                summaries.append(AutoMergeSummary(source: sourceSummary, target: targetSummary))
-            }
-            return summaries
-        }
-    }
-
-    func undoAutoMerge(sourcePersonID: UUID) throws {
-        try withConnection { connection in
-            let service = FaceClusteringService(
-                faceStore: faceStore,
-                recognitionService: FaceRecognitionService(),
-                similarityThreshold: similarityThreshold
-            )
-            try service.undoAutoMerge(sourcePersonID, connection: connection)
         }
     }
 
@@ -504,6 +485,12 @@ private final class FaceDataProvider: @unchecked Sendable {
         }
     }
 
+    func unassignFace(faceID: UUID) throws {
+        try withConnection { connection in
+            try faceStore.unassignFaceFromPerson(faceID, useHighThreshold: false, connection: connection)
+        }
+    }
+
     private func withConnection<T>(_ body: (Connection) throws -> T) throws -> T {
         let connection = try Connection(configuration: config.makeConnectionConfiguration())
         defer { connection.close() }
@@ -543,9 +530,11 @@ private final class FaceDataProvider: @unchecked Sendable {
             sampleImageURL: thumbnailFaceID.map { "/api/faces/\($0.uuidString)/thumbnail?size=160" },
             qualityScore: person.clusterQuality,
             favoriteFaceID: person.favoriteFaceID,
-            needsReprocessing: person.needsReprocessing
+            needsReprocessing: person.needsReprocessing,
+            isIgnored: person.isIgnored
         )
     }
+
 }
 
 // MARK: - Thumbnail Provider
@@ -693,11 +682,7 @@ private struct FacePersonSummary: Codable {
     let qualityScore: Float?
     let favoriteFaceID: UUID?
     let needsReprocessing: Bool
-}
-
-private struct AutoMergeSummary: Codable {
-    let source: FacePersonSummary
-    let target: FacePersonSummary
+    let isIgnored: Bool
 }
 
 private struct FacePreview: Codable {
@@ -766,14 +751,6 @@ private enum FaceWebAssets {
           <section id=\"persons-view\" class=\"view active\">
             <div class=\"grid\" id=\"persons-grid\"></div>
             <div class=\"empty\" id=\"persons-empty\">No persons available.</div>
-          </section>
-          <section id=\"auto-merges-view\" class=\"view\">
-            <div class=\"auto-merges-header\">
-              <h2>Automatic merges</h2>
-              <p class=\"subtitle\">Review and undo auto-merged persons</p>
-            </div>
-            <div class=\"merge-list\" id=\"auto-merges-list\"></div>
-            <div class=\"empty\" id=\"auto-merges-empty\">No automatic merges to review.</div>
           </section>
         </main>
         <div id=\"drawer\" class=\"drawer hidden\">
@@ -846,56 +823,6 @@ private enum FaceWebAssets {
       grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
       gap: 16px;
     }
-    .auto-merges-header {
-      margin-top: 32px;
-    }
-    .auto-merges-header h2 {
-      margin: 0;
-    }
-    .auto-merges-header .subtitle {
-      margin: 4px 0 0;
-      color: rgba(0,0,0,0.6);
-    }
-    .merge-list {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      margin-top: 16px;
-    }
-    .merge-card {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 16px;
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
-      align-items: center;
-    }
-    .merge-card .person-snippet {
-      display: flex;
-      flex-direction: row;
-      gap: 12px;
-      align-items: center;
-    }
-    .merge-card img {
-      width: 64px;
-      height: 64px;
-      object-fit: cover;
-      border-radius: 12px;
-      background: #e6e6e6;
-    }
-    .merge-card .actions {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-    .merge-card button.secondary {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: inherit;
-    }
     .card {
       background: var(--card-bg);
       border-radius: 16px;
@@ -924,6 +851,19 @@ private enum FaceWebAssets {
       top: 8px;
       right: 8px;
       background: rgba(255, 149, 0, 0.95);
+      color: white;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      pointer-events: none;
+    }
+    .ignored-badge {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: rgba(142, 142, 147, 0.95);
       color: white;
       padding: 6px 12px;
       border-radius: 6px;
@@ -1244,6 +1184,34 @@ private enum FaceWebAssets {
       display: block;
       border-radius: 12px;
     }
+    .face-remove-btn {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      width: 24px;
+      height: 24px;
+      background: rgba(255, 59, 48, 0.95);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      font-size: 16px;
+      font-weight: bold;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 0.2s;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+    .face-thumbnail-wrapper:hover .face-remove-btn {
+      opacity: 1;
+    }
+    .face-remove-btn:hover {
+      background: rgba(255, 45, 35, 1);
+      transform: scale(1.1);
+    }
     @media (max-width: 768px) {
       header {
         flex-direction: column;
@@ -1258,12 +1226,12 @@ private enum FaceWebAssets {
     static let appJS = """
     const state = {
       persons: [],
-      autoMerges: [],
       facesCache: new Map(),
       sortMode: 'created',
       unnamedOnly: false,
       currentPersonID: null,
       currentPersonName: null,
+      currentPersonIgnored: false,
       isEditingName: false,
       currentFavoriteFaceID: null,
     };
@@ -1337,6 +1305,9 @@ private enum FaceWebAssets {
         } else if (e.key === 'e') {
           e.preventDefault();
           enterEditMode();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          closeDrawer();
         }
       });
     }
@@ -1421,7 +1392,7 @@ private enum FaceWebAssets {
       const currentIndex = filtered.findIndex((p) => p.id === state.currentPersonID);
       if (currentIndex === -1 || currentIndex >= filtered.length - 1) return;
       const nextPerson = filtered[currentIndex + 1];
-      openDrawer(nextPerson.id, nextPerson.name || 'Person', nextPerson.faceCount);
+      openDrawer(nextPerson.id, nextPerson.name || 'Person', nextPerson.faceCount, nextPerson);
     }
 
     function navigateToPreviousPerson() {
@@ -1431,12 +1402,12 @@ private enum FaceWebAssets {
       const currentIndex = filtered.findIndex((p) => p.id === state.currentPersonID);
       if (currentIndex <= 0) return;
       const prevPerson = filtered[currentIndex - 1];
-      openDrawer(prevPerson.id, prevPerson.name || 'Person', prevPerson.faceCount);
+      openDrawer(prevPerson.id, prevPerson.name || 'Person', prevPerson.faceCount, prevPerson);
     }
 
     async function refreshData() {
       state.facesCache = new Map();
-      await Promise.all([loadPersons(), loadAutoMerges()]);
+      await loadPersons();
     }
 
     async function loadPersons() {
@@ -1445,17 +1416,6 @@ private enum FaceWebAssets {
         if (!response.ok) throw new Error('Failed to load persons');
         state.persons = await response.json();
         renderPersons();
-      } catch (error) {
-        console.error(error);
-      }
-    }
-
-    async function loadAutoMerges() {
-      try {
-        const response = await fetch('/api/auto-merges');
-        if (!response.ok) throw new Error('Failed to load auto merges');
-        state.autoMerges = await response.json();
-        renderAutoMerges();
       } catch (error) {
         console.error(error);
       }
@@ -1485,20 +1445,6 @@ private enum FaceWebAssets {
       }
       filtered.forEach((person) => {
         grid.appendChild(createCard(person));
-      });
-    }
-
-    function renderAutoMerges() {
-      const list = document.getElementById('auto-merges-list');
-      const empty = document.getElementById('auto-merges-empty');
-      list.innerHTML = '';
-      if (!state.autoMerges || state.autoMerges.length === 0) {
-        empty.style.display = 'block';
-        return;
-      }
-      empty.style.display = 'none';
-      state.autoMerges.forEach((merge) => {
-        list.appendChild(createMergeCard(merge));
       });
     }
 
@@ -1540,8 +1486,15 @@ private enum FaceWebAssets {
 
       imgWrapper.appendChild(img);
 
-      // Add reprocessing badge if flagged
-      if (person.needsReprocessing) {
+      // Add ignored badge if ignored (takes priority over reprocessing)
+      if (person.isIgnored) {
+        const badge = document.createElement('div');
+        badge.className = 'ignored-badge';
+        badge.textContent = 'Ignored';
+        badge.title = 'This person is hidden from the main view';
+        imgWrapper.appendChild(badge);
+      } else if (person.needsReprocessing) {
+        // Add reprocessing badge if flagged
         const badge = document.createElement('div');
         badge.className = 'reprocess-badge';
         badge.textContent = 'Queued for reprocessing';
@@ -1579,7 +1532,7 @@ private enum FaceWebAssets {
       button.type = 'button';
       button.className = 'view-btn';
       button.textContent = 'View faces';
-      button.addEventListener('click', () => openDrawer(person.id, person.name || 'Person', person.faceCount));
+      button.addEventListener('click', () => openDrawer(person.id, person.name || 'Person', person.faceCount, person));
 
       card.append(imgWrapper, titleSection, meta, button);
       return card;
@@ -1859,7 +1812,7 @@ private enum FaceWebAssets {
         const viewBtn = card.querySelector('.view-btn');
         if (viewBtn) {
           viewBtn.textContent = 'View target';
-          viewBtn.onclick = () => openDrawer(targetPerson.id, targetPerson.name || 'Person', targetPerson.faceCount);
+          viewBtn.onclick = () => openDrawer(targetPerson.id, targetPerson.name || 'Person', targetPerson.faceCount, targetPerson);
         }
 
       } catch (error) {
@@ -1873,9 +1826,12 @@ private enum FaceWebAssets {
 
     async function undoMerge(card, sourcePerson, targetPerson) {
       const titleSection = card.querySelector('.card-title-section');
-      const saveStatus = card.querySelector('.card-save-status');
 
-      saveStatus.textContent = 'Undoing...';
+      // Show undoing status
+      titleSection.innerHTML = '';
+      const statusSpan = document.createElement('span');
+      statusSpan.textContent = 'Undoing...';
+      titleSection.appendChild(statusSpan);
 
       try {
         const response = await fetch(`/api/persons/${sourcePerson.id}/undo-merge`, {
@@ -1909,7 +1865,7 @@ private enum FaceWebAssets {
         const viewBtn = card.querySelector('.view-btn');
         if (viewBtn) {
           viewBtn.textContent = 'View faces';
-          viewBtn.onclick = () => openDrawer(sourcePerson.id, sourcePerson.name || 'Person', sourcePerson.faceCount);
+          viewBtn.onclick = () => openDrawer(sourcePerson.id, sourcePerson.name || 'Person', sourcePerson.faceCount, sourcePerson);
         }
 
         // Reload data to refresh counts
@@ -1917,99 +1873,49 @@ private enum FaceWebAssets {
 
       } catch (error) {
         console.error(error);
-        saveStatus.textContent = 'Undo failed';
-        setTimeout(() => { saveStatus.textContent = ''; }, 3000);
+        titleSection.innerHTML = '';
+        const errorSpan = document.createElement('span');
+        errorSpan.className = 'card-save-status';
+        errorSpan.textContent = 'Undo failed';
+        titleSection.appendChild(errorSpan);
+        setTimeout(() => { errorSpan.textContent = ''; }, 3000);
       }
     }
 
-    function createMergeCard(merge) {
-      const card = document.createElement('div');
-      card.className = 'merge-card';
-      card.append(
-        createPersonSnippet(merge.source, 'Source'),
-        createPersonSnippet(merge.target, 'Target'),
-        createMergeActions(merge)
-      );
-      return card;
-    }
-
-    function createPersonSnippet(person, label) {
-      const wrapper = document.createElement('div');
-      wrapper.className = 'person-snippet';
-      const img = document.createElement('img');
-      img.alt = `${label} sample`;
-      if (person.sampleImageURL) {
-        img.src = person.sampleImageURL;
-      } else {
-        img.style.background = '#d8d8d8';
-      }
-      const text = document.createElement('div');
-      const title = document.createElement('p');
-      title.style.margin = '0';
-      title.style.fontWeight = '600';
-      title.textContent = label;
-      const subtitle = document.createElement('p');
-      subtitle.style.margin = '4px 0 0';
-      subtitle.style.color = 'rgba(0,0,0,0.6)';
-      subtitle.textContent = `${person.name || 'Unnamed'} • ${person.faceCount} face${person.faceCount === 1 ? '' : 's'}`;
-      text.append(title, subtitle);
-      wrapper.append(img, text);
-      return wrapper;
-    }
-
-    function createMergeActions(merge) {
-      const actions = document.createElement('div');
-      actions.className = 'actions';
-      const viewSource = document.createElement('button');
-      viewSource.type = 'button';
-      viewSource.className = 'secondary';
-      viewSource.textContent = 'View source';
-      viewSource.addEventListener('click', () => openDrawer(
-        merge.source.id,
-        merge.source.name || 'Person',
-        merge.source.faceCount
-      ));
-
-      const viewTarget = document.createElement('button');
-      viewTarget.type = 'button';
-      viewTarget.className = 'secondary';
-      viewTarget.textContent = 'View target';
-      viewTarget.addEventListener('click', () => openDrawer(
-        merge.target.id,
-        merge.target.name || 'Person',
-        merge.target.faceCount
-      ));
-
-      const undoButton = document.createElement('button');
-      undoButton.type = 'button';
-      undoButton.textContent = 'Undo merge';
-      undoButton.addEventListener('click', () => undoAutoMerge(merge.source.id));
-
-      actions.append(viewSource, viewTarget, undoButton);
-      return actions;
-    }
-
-    async function openDrawer(id, label, faceCount) {
+    async function openDrawer(id, label, faceCount, meta = {}) {
       state.currentPersonID = id;
-      state.currentPersonName = label === 'Person' || label === 'Unnamed person' ? null : label;
       state.isEditingName = false;
 
       const drawer = document.getElementById('drawer');
       drawer.classList.remove('hidden');
-      document.getElementById('drawer-title').textContent = label;
+      const summary = state.persons.find((p) => p.id === id) || meta || {};
+      const isIgnored = summary.isIgnored ?? false;
+      state.currentPersonIgnored = isIgnored;
+      state.currentPersonName = summary.name ?? null;
+      const displayName = summary.name ?? (isIgnored ? 'Ignored person' : (label || 'Unnamed person'));
+      document.getElementById('drawer-title').textContent = displayName;
       document.getElementById('drawer-title').classList.remove('hidden');
       document.getElementById('name-input').classList.add('hidden');
       document.getElementById('edit-name-btn').classList.remove('hidden');
       document.getElementById('save-status').textContent = '';
-      document.getElementById('drawer-meta').textContent = `${faceCount} face${faceCount === 1 ? '' : 's'}`;
+      const totalFaces = summary.faceCount ?? faceCount ?? 0;
+      document.getElementById('drawer-meta').textContent = `${totalFaces} face${totalFaces === 1 ? '' : 's'}`;
+      const ignoreBtn = document.getElementById('ignore-btn');
+      const unignoreBtn = document.getElementById('unignore-btn');
+      if (isIgnored) {
+        ignoreBtn.classList.add('hidden');
+        unignoreBtn.classList.remove('hidden');
+      } else {
+        ignoreBtn.classList.remove('hidden');
+        unignoreBtn.classList.add('hidden');
+      }
       const content = document.getElementById('drawer-content');
       const empty = document.getElementById('drawer-empty');
       content.innerHTML = '';
       empty.style.display = 'none';
 
       // Get current person's favorite face ID
-      const person = state.persons.find((p) => p.id === id);
-      state.currentFavoriteFaceID = person?.favoriteFaceID || null;
+      state.currentFavoriteFaceID = summary.favoriteFaceID ?? null;
 
       const cacheKey = `person:${id}`;
       if (state.facesCache.has(cacheKey)) {
@@ -2053,11 +1959,22 @@ private enum FaceWebAssets {
         img.style.cursor = 'pointer';
         img.title = 'Click to set as favorite thumbnail';
 
+        // Add remove button
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'face-remove-btn';
+        removeBtn.innerHTML = '×';
+        removeBtn.title = 'Remove this face from this person';
+        removeBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          await removeFaceFromPerson(face.id);
+        });
+
         wrapper.addEventListener('click', async () => {
           await setFavoriteFace(state.currentPersonID, face.id);
         });
 
         wrapper.appendChild(img);
+        wrapper.appendChild(removeBtn);
         content.appendChild(wrapper);
       });
     }
@@ -2092,6 +2009,44 @@ private enum FaceWebAssets {
       }
     }
 
+    async function removeFaceFromPerson(faceID) {
+      if (!confirm('Remove this face from this person? It will be re-clustered the next time you run cluster-faces.')) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/faces/${faceID}/unassign`, {
+          method: 'POST'
+        });
+        if (!response.ok) throw new Error('Failed to remove face');
+
+        // Remove from cache
+        const cacheKey = `person:${state.currentPersonID}`;
+        if (state.facesCache.has(cacheKey)) {
+          const faces = state.facesCache.get(cacheKey);
+          const updatedFaces = faces.filter(f => f.id !== faceID);
+          state.facesCache.set(cacheKey, updatedFaces);
+          renderFaces(updatedFaces);
+        }
+
+        // Update person's face count in state
+        const person = state.persons.find((p) => p.id === state.currentPersonID);
+        if (person) {
+          person.faceCount = Math.max(0, person.faceCount - 1);
+        }
+
+        // Update drawer meta
+        const totalFaces = person ? person.faceCount : 0;
+        document.getElementById('drawer-meta').textContent = `${totalFaces} face${totalFaces === 1 ? '' : 's'}`;
+
+        // Refresh main grid to update counts
+        renderPersons();
+      } catch (error) {
+        console.error(error);
+        alert('Unable to remove face. Check the console for details.');
+      }
+    }
+
     async function reprocessCurrentPerson() {
       if (!state.currentPersonID) return;
 
@@ -2104,9 +2059,14 @@ private enum FaceWebAssets {
         });
         if (!response.ok) throw new Error('Failed to flag person for reprocessing');
 
-        alert('Cluster flagged for reprocessing. Run cluster-faces to re-cluster these faces.');
+        // Update local state instead of reloading
+        const person = state.persons.find((p) => p.id === state.currentPersonID);
+        if (person) {
+          person.needsReprocessing = true;
+        }
+
         closeDrawer();
-        await refreshData();
+        renderPersons();
       } catch (error) {
         console.error(error);
         alert('Unable to flag cluster for reprocessing. Check the console for details.');
@@ -2116,7 +2076,7 @@ private enum FaceWebAssets {
     async function ignoreCurrentPerson() {
       if (!state.currentPersonID) return;
 
-      const confirmMsg = 'Ignore this person? They will be hidden from the UI and their name will be cleared. You can undo this before closing the drawer.';
+      const confirmMsg = 'Ignore this person? They will be hidden from the UI and their name will be cleared.';
       if (!confirm(confirmMsg)) return;
 
       try {
@@ -2125,16 +2085,15 @@ private enum FaceWebAssets {
         });
         if (!response.ok) throw new Error('Failed to ignore person');
 
-        // Switch button visibility
-        document.getElementById('ignore-btn').classList.add('hidden');
-        document.getElementById('unignore-btn').classList.remove('hidden');
+        // Update local state
+        const person = state.persons.find((p) => p.id === state.currentPersonID);
+        if (person) {
+          person.isIgnored = true;
+          person.name = null;
+        }
 
-        // Update drawer title to show it's now ignored
-        state.currentPersonName = null;
-        document.getElementById('drawer-title').textContent = 'Ignored person';
-
-        // Refresh data so when drawer closes, person will be gone from grid
-        await refreshData();
+        closeDrawer();
+        renderPersons();
       } catch (error) {
         console.error(error);
         alert('Unable to ignore person. Check the console for details.');
@@ -2150,30 +2109,26 @@ private enum FaceWebAssets {
         });
         if (!response.ok) throw new Error('Failed to unignore person');
 
+        // Update local state
+        const person = state.persons.find((p) => p.id === state.currentPersonID);
+        if (person) {
+          person.isIgnored = false;
+        }
+
         // Switch button visibility
         document.getElementById('unignore-btn').classList.add('hidden');
         document.getElementById('ignore-btn').classList.remove('hidden');
+        state.currentPersonIgnored = false;
 
         // Update drawer title
         document.getElementById('drawer-title').textContent = 'Unnamed person';
         state.currentPersonName = null;
 
-        // Refresh data so person reappears in grid
-        await refreshData();
+        // Re-render to update badge
+        renderPersons();
       } catch (error) {
         console.error(error);
         alert('Unable to unignore person. Check the console for details.');
-      }
-    }
-
-    async function undoAutoMerge(personID) {
-      try {
-        const response = await fetch(`/api/auto-merges/${personID}/undo`, { method: 'POST' });
-        if (!response.ok) throw new Error('Failed to undo merge');
-        await refreshData();
-      } catch (error) {
-        console.error(error);
-        alert('Unable to undo merge. Check the console for details.');
       }
     }
     """
