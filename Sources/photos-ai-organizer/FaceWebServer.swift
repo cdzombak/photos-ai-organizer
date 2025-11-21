@@ -1362,7 +1362,6 @@ private enum FaceWebAssets {
       setupSortControls();
       setupDrawer();
       setupNameEditor();
-      setupKeyboardShortcuts();
       refreshData();
     });
 
@@ -1408,28 +1407,6 @@ private enum FaceWebAssets {
       input.addEventListener('blur', () => {
         if (state.isEditingName) {
           saveName();
-        }
-      });
-    }
-
-    function setupKeyboardShortcuts() {
-      document.addEventListener('keydown', (e) => {
-        if (state.isEditingName) return;
-        const drawer = document.getElementById('drawer');
-        if (drawer.classList.contains('hidden')) return;
-
-        if (e.key === 'n' || e.key === 'ArrowRight') {
-          e.preventDefault();
-          navigateToNextPerson();
-        } else if (e.key === 'p' || e.key === 'ArrowLeft') {
-          e.preventDefault();
-          navigateToPreviousPerson();
-        } else if (e.key === 'e') {
-          e.preventDefault();
-          enterEditMode();
-        } else if (e.key === 'Escape') {
-          e.preventDefault();
-          closeDrawer();
         }
       });
     }
