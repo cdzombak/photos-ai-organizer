@@ -780,6 +780,13 @@ public final class FaceStore {
         return blocked
     }
 
+    public func clearBlock(_ faceID: UUID, personID: UUID, connection: Connection) throws {
+        let sql = "DELETE FROM face_person_blocks WHERE face_id = $1 AND person_id = $2;"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute(parameterValues: [faceID.uuidString, personID.uuidString])
+    }
+
     public func resetUnnamedUnmergedPersons(connection: Connection) throws -> Int {
         // Count persons to be reset (unnamed, unmerged, not ignored, and not referenced by other persons)
         let countSQL = """

@@ -248,6 +248,21 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
                       let faceID = UUID(uuidString: String(pathComponents[2])) {
                 try dataProvider.unassignFace(faceID: faceID)
                 return respond(status: .noContent, context: context)
+            } else if pathComponents.count == 4,
+                      pathComponents[0] == "api",
+                      pathComponents[1] == "faces",
+                      pathComponents[3] == "assign",
+                      let faceID = UUID(uuidString: String(pathComponents[2])) {
+                guard var body = body,
+                      let bytes = body.readBytes(length: body.readableBytes) else {
+                    return respond(status: .badRequest, context: context)
+                }
+                let data = Data(bytes)
+                guard let json = try? JSONDecoder().decode(AssignFaceRequest.self, from: data) else {
+                    return respond(status: .badRequest, context: context)
+                }
+                try dataProvider.assignFace(faceID: faceID, request: json)
+                return respond(status: .noContent, context: context)
             } else {
                 return respond(status: .notFound, context: context)
             }
@@ -325,6 +340,7 @@ private final class FaceHTTPHandler: ChannelInboundHandler, @unchecked Sendable 
 enum FaceDataError: Error {
     case personNotFound
     case invalidRequest
+    case faceNotFound
 }
 
 private final class FaceDataProvider: @unchecked Sendable {
@@ -505,6 +521,37 @@ private final class FaceDataProvider: @unchecked Sendable {
                 try faceStore.blockFace(faceID, fromPerson: personID, connection: connection)
             }
             try faceStore.unassignFaceFromPerson(faceID, useHighThreshold: false, connection: connection)
+        }
+    }
+
+    func assignFace(faceID: UUID, request: AssignFaceRequest) throws {
+        try withConnection { connection in
+            guard let currentDetection = try faceStore.getFaceDetection(faceID, connection: connection) else {
+                throw FaceDataError.faceNotFound
+            }
+
+            var targetPersonID: UUID?
+            if let personID = request.personID {
+                targetPersonID = personID
+            } else if let name = request.name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+                let person = try faceStore.createPerson(connection: connection).withName(name)
+                try faceStore.savePerson(person, connection: connection)
+                targetPersonID = person.id
+            }
+
+            guard let target = targetPersonID else {
+                throw FaceDataError.personNotFound
+            }
+
+            try faceStore.clearBlock(faceID, personID: target, connection: connection)
+            try faceStore.assignFaceToPerson(faceID, personID: target, connection: connection)
+
+            // If the face was previously assigned elsewhere, optionally mark that person for review
+            if let previousPerson = currentDetection.personID, previousPerson != target {
+                if let prev = try faceStore.getPerson(previousPerson, connection: connection) {
+                    try faceStore.savePerson(prev.withNeedsReprocessing(true), connection: connection)
+                }
+            }
         }
     }
 
@@ -694,6 +741,11 @@ private struct UpdateNameRequest: Codable {
 
 private struct MergePersonRequest: Codable {
     let targetID: UUID
+}
+
+private struct AssignFaceRequest: Codable {
+    let personID: UUID?
+    let name: String?
 }
 
 private struct SetFavoriteFaceRequest: Codable {
@@ -1034,7 +1086,43 @@ private enum FaceWebAssets {
       color: rgba(0,0,0,0.5);
       font-style: italic;
     }
-    .drawer {
+    
+    .face-context-menu {
+      position: fixed;
+      background: #fff;
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+      border-radius: 8px;
+      padding: 4px 0;
+      z-index: 20;
+      min-width: 180px;
+    }
+    .face-context-menu.hidden { display: none; }
+    .face-context-menu button {
+      width: 100%; border: none; background: none; text-align: left;
+      padding: 10px 14px; cursor: pointer; font-size: 14px;
+    }
+    .face-context-menu button:hover { background: rgba(0,0,0,0.05); }
+
+    .face-assign-popover {
+      position: fixed;
+      background: #fff;
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+      border-radius: 8px;
+      padding: 12px;
+      z-index: 21;
+      width: 260px;
+    }
+    .face-assign-popover.hidden { display: none; }
+    .face-assign-popover input {
+      width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border);
+      margin-bottom: 8px; font-size: 14px;
+    }
+    .assign-suggestions { max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
+    .assign-suggestions .suggestion { padding: 8px 10px; cursor: pointer; }
+    .assign-suggestions .suggestion:hover, .assign-suggestions .suggestion.selected { background: rgba(0,0,0,0.05); }
+.drawer {
       position: fixed;
       top: 0;
       right: 0;
@@ -2020,6 +2108,11 @@ private enum FaceWebAssets {
           await removeFaceFromPerson(face.id);
         });
 
+        wrapper.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          openFaceContextMenu(face, e);
+        });
+
         wrapper.addEventListener('click', async () => {
           await setFavoriteFace(state.currentPersonID, face.id);
         });
@@ -2036,6 +2129,159 @@ private enum FaceWebAssets {
         renderFaces(state.facesCache.get(cacheKey));
       }
     });
+
+    // Face context menu and assignment popover
+    const faceContextMenu = document.createElement('div');
+    faceContextMenu.className = 'face-context-menu hidden';
+    faceContextMenu.innerHTML = `
+      <button data-action=\"favorite\">Make favorite</button>
+      <button data-action=\"assign\">Assign to person…</button>
+      <button data-action=\"remove\">Remove from person</button>
+    `;
+    document.body.appendChild(faceContextMenu);
+
+    const faceAssignPopover = document.createElement('div');
+    faceAssignPopover.className = 'face-assign-popover hidden';
+    faceAssignPopover.innerHTML = `
+      <input type=\"text\" id=\"assign-input\" placeholder=\"Search or type a new name\" />
+      <div class=\"assign-suggestions\" id=\"assign-suggestions\"></div>
+    `;
+    document.body.appendChild(faceAssignPopover);
+
+    let currentContextFace = null;
+    let currentAssignSuggestions = [];
+    let currentAssignSelection = -1;
+
+    function closeContextMenus() {
+      faceContextMenu.classList.add('hidden');
+      faceAssignPopover.classList.add('hidden');
+      currentContextFace = null;
+      currentAssignSelection = -1;
+    }
+
+    function openFaceContextMenu(face, evt) {
+      currentContextFace = face;
+      faceAssignPopover.classList.add('hidden');
+      const { clientX: x, clientY: y } = evt;
+      faceContextMenu.style.top = `${y}px`;
+      faceContextMenu.style.left = `${x}px`;
+      faceContextMenu.classList.remove('hidden');
+    }
+
+    faceContextMenu.addEventListener('click', async (e) => {
+      const action = e.target.dataset.action;
+      if (!action || !currentContextFace) return;
+      e.stopPropagation();
+      const face = currentContextFace;
+      closeContextMenus();
+      if (action === 'favorite') {
+        await setFavoriteFace(state.currentPersonID, face.id);
+      } else if (action === 'remove') {
+        await removeFaceFromPerson(face.id);
+      } else if (action === 'assign') {
+        openAssignPopover(face, e);
+      }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!faceContextMenu.contains(e.target) && !faceAssignPopover.contains(e.target)) {
+        closeContextMenus();
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeContextMenus();
+    });
+
+    function openAssignPopover(face, evt) {
+      currentContextFace = face;
+      const input = faceAssignPopover.querySelector('#assign-input');
+      const suggestionsEl = faceAssignPopover.querySelector('#assign-suggestions');
+      input.value = '';
+      suggestionsEl.innerHTML = '';
+      currentAssignSelection = -1;
+      faceAssignPopover.style.top = `${evt.clientY}px`;
+      faceAssignPopover.style.left = `${evt.clientX}px`;
+      faceAssignPopover.classList.remove('hidden');
+      input.focus();
+      refreshAssignSuggestions('');
+
+      input.oninput = () => refreshAssignSuggestions(input.value.trim());
+      input.onkeydown = async (e) => {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          currentAssignSelection = Math.min(currentAssignSelection + 1, currentAssignSuggestions.length - 1);
+          renderAssignSuggestions();
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          currentAssignSelection = Math.max(currentAssignSelection - 1, -1);
+          renderAssignSuggestions();
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          if (currentAssignSelection >= 0) {
+            const target = currentAssignSuggestions[currentAssignSelection];
+            handleAssignSelection(target);
+          } else if (input.value.trim().length > 0) {
+            await handleAssignNewName(input.value.trim());
+          }
+        } else if (e.key === 'Escape') {
+          closeContextMenus();
+        }
+      };
+
+      function refreshAssignSuggestions(query) {
+        const normalized = query.toLowerCase();
+        currentAssignSuggestions = state.persons
+          .filter((p) => p.id !== state.currentPersonID && p.name && p.name.toLowerCase().includes(normalized));
+        currentAssignSelection = -1;
+        renderAssignSuggestions();
+      }
+
+      function renderAssignSuggestions() {
+        suggestionsEl.innerHTML = '';
+        currentAssignSuggestions.forEach((p, idx) => {
+          const item = document.createElement('div');
+          item.className = 'suggestion';
+          if (idx === currentAssignSelection) item.classList.add('selected');
+          item.textContent = `${p.name} (${p.faceCount} faces)`;
+          item.addEventListener('click', () => handleAssignSelection(p));
+          suggestionsEl.appendChild(item);
+        });
+      }
+
+      async function handleAssignSelection(person) {
+        closeContextMenus();
+        await assignFaceToPerson(face, { personID: person.id });
+      }
+
+      async function handleAssignNewName(name) {
+        closeContextMenus();
+        await assignFaceToPerson(face, { name });
+      }
+    }
+
+    async function assignFaceToPerson(face, payload) {
+      try {
+        const response = await fetch(`/api/faces/${face.id}/assign`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error('Failed to assign face');
+
+        // Remove from current person's cache if it moved
+        const cacheKey = `person:${state.currentPersonID}`;
+        if (state.facesCache.has(cacheKey)) {
+          const faces = state.facesCache.get(cacheKey);
+          const updated = faces.filter(f => f.id !== face.id);
+          state.facesCache.set(cacheKey, updated);
+          renderFaces(updated);
+        }
+        await refreshData();
+      } catch (error) {
+        console.error(error);
+        alert('Unable to assign face. Check console for details.');
+      }
+    }
 
     async function setFavoriteFace(personID, faceID) {
       try {
