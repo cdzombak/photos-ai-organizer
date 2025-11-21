@@ -59,7 +59,8 @@ struct ClusterVisitsCommand: AsyncParsableCommand {
         let clusters = detector.detectClusters(
             appearances: appearances,
             rarePersons: rarePersons,
-            householdPersons: householdPersons
+            householdPersons: householdPersons,
+            rarityScores: stats.rarityScores
         )
 
         guard !clusters.isEmpty else {
@@ -84,30 +85,67 @@ private struct VisitStatistics {
     let personCounts: [UUID: Int]
     let rarePersons: Set<UUID>
     let householdPersons: Set<UUID>
+    let rarityScores: [UUID: Double]
 
-    init(appearances: [FaceStore.PersonAppearance]) {
+    init(appearances: [FaceStore.PersonAppearance], halfLifeDays: Double = 180.0) {
         var counts: [UUID: Int] = [:]
+        var decayedCounts: [UUID: Double] = [:]
+        var monthlyCounts: [UUID: [DateComponents: Int]] = [:]
+        let calendar = Calendar(identifier: .gregorian)
+        let latestDate = appearances.map(\.creationDate).max() ?? Date()
+
         for appearance in appearances {
             counts[appearance.personID, default: 0] += 1
+
+            let ageDays = latestDate.timeIntervalSince(appearance.creationDate) / 86_400.0
+            let weight = exp(-ageDays / halfLifeDays)
+            decayedCounts[appearance.personID, default: 0] += weight
+
+            let comps = calendar.dateComponents([.year, .month], from: appearance.creationDate)
+            monthlyCounts[appearance.personID, default: [:]][comps, default: 0] += 1
         }
+
         self.personCounts = counts
 
-        let total = counts.values.reduce(0, +)
-        let mean = counts.isEmpty ? 0 : Double(total) / Double(counts.count)
-        let highFreqCutoff = max(20, Int(mean * 2.5))
-        let rareCutoff = max(2, Int(mean * 0.5))
+        let globalMeanDecay = decayedCounts.isEmpty
+            ? 1.0
+            : decayedCounts.values.reduce(0, +) / Double(decayedCounts.count)
 
         var rare: Set<UUID> = []
         var household: Set<UUID> = []
-        for (personID, count) in counts {
-            if count >= highFreqCutoff {
+        var rarity: [UUID: Double] = [:]
+
+        for (personID, totalCount) in counts {
+            let decayed = decayedCounts[personID] ?? 0
+            let monthly = monthlyCounts[personID] ?? [:]
+            let currentMonth = monthly.keys.max { lhs, rhs in
+                let lhsDate = calendar.date(from: lhs) ?? Date.distantPast
+                let rhsDate = calendar.date(from: rhs) ?? Date.distantPast
+                return lhsDate < rhsDate
+            }
+            let currentCount = currentMonth.flatMap { monthly[$0] } ?? 0
+            let mean = monthly.isEmpty ? 0.0 : Double(monthly.values.reduce(0, +)) / Double(monthly.count)
+            let variance = monthly.isEmpty ? 0.0 : monthly.values.reduce(0.0) { partial, value in
+                let delta = Double(value) - mean
+                return partial + delta * delta
+            } / Double(max(1, monthly.count))
+            let stddev = max(1.0, sqrt(variance))
+            let rarityScore = monthly.isEmpty ? 2.0 : (mean - Double(currentCount)) / stddev
+            rarity[personID] = rarityScore
+
+            let lowCutoff = max(1.0, globalMeanDecay * 0.5)
+            let highCutoff = max(5.0, globalMeanDecay * 2.0)
+
+            if decayed >= highCutoff && totalCount > 10 {
                 household.insert(personID)
-            } else if count <= rareCutoff {
+            } else if rarityScore >= 1.0 || decayed <= lowCutoff {
                 rare.insert(personID)
             }
         }
+
         self.rarePersons = rare.subtracting(household)
         self.householdPersons = household
+        self.rarityScores = rarity
     }
 }
 
@@ -121,7 +159,8 @@ private struct VisitWindowDetector {
     func detectClusters(
         appearances: [FaceStore.PersonAppearance],
         rarePersons: Set<UUID>,
-        householdPersons: Set<UUID>
+        householdPersons: Set<UUID>,
+        rarityScores: [UUID: Double]
     ) -> [VisitCluster] {
         let events = appearances.sorted { $0.creationDate < $1.creationDate }
         guard let firstDate = events.first?.creationDate else { return [] }
@@ -148,7 +187,12 @@ private struct VisitWindowDetector {
             let rarePeople = Set(people.filter { rarePersons.contains($0) })
             let household = Set(people.filter { householdPersons.contains($0) })
 
-            let score = scoreWindow(rareCount: rarePeople.count, totalFaces: subset.count, householdCount: household.count)
+            let score = scoreWindow(
+                rarePeople: rarePeople,
+                rarityScores: rarityScores,
+                totalFaces: subset.count,
+                householdCount: household.count
+            )
             if rarePeople.count >= minRarePersons && subset.count >= minFaces && assetIDs.count >= minAssets {
                 let cluster = VisitCluster(
                     windowStart: windowStart,
@@ -168,11 +212,24 @@ private struct VisitWindowDetector {
         return merged.sorted { $0.score > $1.score }
     }
 
-    private func scoreWindow(rareCount: Int, totalFaces: Int, householdCount: Int) -> Double {
+    private func scoreWindow(
+        rarePeople: Set<UUID>,
+        rarityScores: [UUID: Double],
+        totalFaces: Int,
+        householdCount: Int
+    ) -> Double {
         let density = Double(totalFaces)
-        let rareScore = Double(rareCount) * 2.0
+        let rareScoreSum = rarePeople.reduce(0.0) { partial, person in
+            partial + max(0, rarityScores[person] ?? 0)
+        }
+        let rareCount = rarePeople.count
+        let cooccurrenceBonus = rareCount >= 2 ? Double(rareCount * (rareCount - 1)) * 0.75 : 0
+        let singleRareDiscount = (rareCount == 1) ? 0.6 : 1.0
         let householdPenalty = householdCount > 0 ? log(Double(householdCount) + 1) : 0
-        return (rareScore + log(density + 1)) - householdPenalty
+
+        return ((rareScoreSum * 1.25) + cooccurrenceBonus) * singleRareDiscount
+            + log(density + 1)
+            - householdPenalty
     }
 
     private func mergeOverlapping(_ clusters: [VisitCluster], gap: TimeInterval) -> [VisitCluster] {
