@@ -811,64 +811,6 @@ public final class FaceStore {
         return detections
     }
 
-    public func getFacesWithoutPerson(connection: Connection) throws -> [FaceDetection] {
-        let sql = """
-        SELECT id, asset_id, person_id, bounding_x, bounding_y,
-               bounding_width, bounding_height, confidence, face_embedding::text, created_at
-        FROM face_detections
-        WHERE person_id IS NULL
-        ORDER BY created_at DESC;
-        """
-        let statement = try connection.prepareStatement(text: sql)
-        defer { statement.close() }
-
-        let cursor = try statement.execute()
-        var detections: [FaceDetection] = []
-
-        for row in cursor {
-            let resolved = try row.get()
-            guard let idString = try resolved.columns[0].optionalString(),
-                  let id = UUID(uuidString: idString),
-                  let assetID = try resolved.columns[1].optionalString(),
-                  let boundingX = try resolved.columns[3].optionalDouble(),
-                  let boundingY = try resolved.columns[4].optionalDouble(),
-                  let boundingWidth = try resolved.columns[5].optionalDouble(),
-                  let boundingHeight = try resolved.columns[6].optionalDouble(),
-                  let confidence = try resolved.columns[7].optionalDouble(),
-                  let createdAt = try resolved.columns[9].optionalTimestampWithTimeZone()?.date else {
-                continue
-            }
-
-            let faceEmbedding: [Float]?
-            if let embeddingJson = try resolved.columns[8].optionalString(),
-               let embeddingData = embeddingJson.data(using: .utf8),
-               let embeddingArray = try JSONSerialization.jsonObject(with: embeddingData) as? [Double] {
-                faceEmbedding = embeddingArray.map { Float($0) }
-            } else {
-                faceEmbedding = nil
-            }
-
-            let boundingBox = CGRect(
-                x: boundingX,
-                y: boundingY,
-                width: boundingWidth,
-                height: boundingHeight
-            )
-
-            detections.append(FaceDetection(
-                id: id,
-                assetID: assetID,
-                personID: nil,
-                boundingBox: boundingBox,
-                confidence: Float(confidence),
-                faceEmbedding: faceEmbedding,
-                createdAt: createdAt
-            ))
-        }
-
-        return detections
-    }
-
     public func getFaceDetection(_ id: UUID, connection: Connection) throws -> FaceDetection? {
         let sql = """
         SELECT id, asset_id, person_id, bounding_x, bounding_y,
