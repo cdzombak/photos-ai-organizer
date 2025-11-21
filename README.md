@@ -11,6 +11,9 @@ Swift CLI that syncs Apple Photos metadata into PostgreSQL and analyzes it to or
 - `import` – scan Photos and upsert asset metadata into Postgres.
 - `grade` – ask an AI model to rate all photos 0–10 (`--concurrency N` to control parallelism; default 10).
 - `serve-grades` – expose a simple web UI previewing graded samples.
+- `detect-faces` – run Vision + FaceNet detection, storing bounding boxes and embeddings in Postgres.
+- `cluster-faces` – build person clusters from stored face embeddings; safe to rerun as you iterate.
+- `serve-faces` – browse/merge/split detected persons and faces in a web UI (default port 8081; override with `--port`).
 - `run-thematic-pipeline` – classify favorite/highly rated photos into configured thematic albums via AI (`--concurrency N`).
 - `sync-thematic-albums` – create/update thematic Photos albums based on AI classifications while respecting manual edits (`--restore-removals`, `--danger-remove`).
 
@@ -46,14 +49,22 @@ Key sections:
 ## Quickstart
 
 ```bash
-# Import photos:
+# 0) Import photos (required for all pipelines):
 swift run photos-ai-organizer import --config photos-config.yml
 
-# Run the travel pipeline and sync results to Photos app:
+# 1) Face detection + clustering:
+#    - Place a FaceNet CoreML package at Sources/Core/Models/facenet_vggface2.mlpackage
+#    - Optional tuning: face_detection.min_confidence, face_recognition.similarity_threshold (see photos-config.example.yml)
+swift run photos-ai-organizer detect-faces --config photos-config.yml --concurrency 8
+swift run photos-ai-organizer cluster-faces --config photos-config.yml
+#    - (Optional) Review/merge/split clusters in the browser:
+swift run photos-ai-organizer serve-faces --config photos-config.yml --port 8081
+
+# 2) Run the travel pipeline and sync results to Photos app:
 swift run photos-ai-organizer run-travel-pipeline --config photos-config.yml --concurrency 10
 swift run photos-ai-organizer sync-travel-albums --config photos-config.yml
 
-# Run the thematic pipeline and sync results to Photos app:
+# 3) Run the thematic pipeline and sync results to Photos app:
 swift run photos-ai-organizer grade --config photos-config.yml
 swift run photos-ai-organizer serve-grades --config photos-config.yml
 swift run photos-ai-organizer run-thematic-pipeline --config photos-config.yml --concurrency 10
@@ -66,17 +77,22 @@ Importing photos is the first step to using any of the pipelines.
 
 ## Temporal Analysis Pipelines
 
-The program runs a set of analysis pipelines to cluster photos into time-oriented albums. Currently, only the travel pipeline is implemented.
-
-Future pipelines are planned to include a face analysis pipeline (which will also allow subtle improvements in the travel pipeline), a holiday pipeline which builds on the results of the travel & face pipelines, and finally a "superpipeline" which combines all the results.
-
-You can create albums based on the output of the travel pipeline, and in the future I plan to support creating albums based on the face pipeline (for "visits" with people you don't usually see/photograph). Eventually, once the superpipeline is implemented, creating albums based on it alone will be preferred.
+The program runs a set of analysis pipelines to cluster photos into time-oriented albums. The face pipeline can help contextualize travel clusters and will feed into future "holiday" and "superpipeline" workflows that combine multiple signals.
 
 ### Travel Pipeline
 
 Run the travel pipeline (`run-travel-pipeline`) to cluster photos based on spatiotemporal proximity. Each cluster is annotated with a location name via Mapbox reverse geocoding.
 
 After running the pipeline, execute `sync-travel-albums` to mirror travel clusters into Photos albums under your configured `travel_albums.folder_name`. By default the sync only adds assets and preserves manual edits; pass `--restore-removals` to re-add assets you've removed from the Photos albums, or `--danger-remove` to delete assets that only exist in Photos.
+
+## Face Detection & Clustering Pipeline
+
+The face pipeline detects faces using Vision, generates embeddings with FaceNet, and clusters similar faces into persons.
+
+- **Model setup:** Place a CoreML FaceNet bundle at `Sources/Core/Models/facenet_vggface2.mlpackage`.
+- **Detect:** `swift run photos-ai-organizer detect-faces --config photos-config.yml --concurrency 8` to write detections + embeddings into Postgres. Tune thresholds via `face_detection.min_confidence` in your config.
+- **Cluster:** `swift run photos-ai-organizer cluster-faces --config photos-config.yml` to group faces into people using `face_recognition.similarity_threshold`. Safe to rerun after adjusting thresholds or merging/splitting persons.
+- **Review:** `swift run photos-ai-organizer serve-faces --config photos-config.yml --port 8081` opens a browser UI to browse persons, mark a favorite face, merge suggestions, and flag clusters for reprocessing. Restart `cluster-faces` after adjustments to apply them.
 
 ## Thematic Analysis Pipeline
 
