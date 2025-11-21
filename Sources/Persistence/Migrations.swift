@@ -173,6 +173,23 @@ public extension MigrationStep {
             """
         ]
     )
+
+    static let createFacePersonBlocks = MigrationStep(
+        identifier: "010_create_face_person_blocks",
+        statements: [
+            """
+            CREATE TABLE IF NOT EXISTS face_person_blocks (
+                face_id UUID NOT NULL REFERENCES face_detections(id) ON DELETE CASCADE,
+                person_id UUID NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (face_id, person_id)
+            );
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_face_person_blocks_face ON face_person_blocks(face_id);
+            """
+        ]
+    )
 }
 
 protocol SQLCommandExecutor {

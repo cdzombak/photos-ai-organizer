@@ -493,6 +493,10 @@ private final class FaceDataProvider: @unchecked Sendable {
 
     func unassignFace(faceID: UUID) throws {
         try withConnection { connection in
+            let current = try faceStore.getFaceDetection(faceID, connection: connection)
+            if let personID = current?.personID {
+                try faceStore.blockFace(faceID, fromPerson: personID, connection: connection)
+            }
             try faceStore.unassignFaceFromPerson(faceID, useHighThreshold: false, connection: connection)
         }
     }

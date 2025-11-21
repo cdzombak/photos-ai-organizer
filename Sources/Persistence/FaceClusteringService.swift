@@ -57,6 +57,8 @@ public struct FaceClusteringService {
                 guard let faceEmbedding = face.faceEmbedding else { continue }
                 totalProcessed += 1
 
+                let blocked = try faceStore.blockedPersons(forFace: face.id, connection: connection)
+
                 // Use k-NN voting via pgvector index
                 let nearestNeighbors = try faceStore.findKNearestFaces(embedding: faceEmbedding, k: kNeighbors, connection: connection)
 
@@ -73,7 +75,9 @@ public struct FaceClusteringService {
                 // pgvector <=> returns cosine distance (1 - similarity)
                 // So distance <= (1 - threshold) means similarity >= threshold
                 let maxDistance = 1.0 - effectiveThreshold
-                let validNeighbors = resolvedNeighbors.filter { $0.distance <= maxDistance }
+                let validNeighbors = resolvedNeighbors
+                    .filter { $0.distance <= maxDistance }
+                    .filter { !blocked.contains($0.personID) }
 
                 // Try voting first for robustness
                 var assignedPersonID = voteOnPerson(from: validNeighbors, votingThreshold: votingThreshold)

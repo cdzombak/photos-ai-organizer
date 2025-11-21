@@ -37,7 +37,8 @@ struct ClusterFacesCommand: AsyncParsableCommand {
             .addNeedsReprocessingColumn,
             .addHighThresholdFlag,
             .addIsIgnoredColumn,
-            .createAutoMergeEventTables
+            .createAutoMergeEventTables,
+            .createFacePersonBlocks
         ])
 
         let faceStore = FaceStore(config: config)

@@ -49,7 +49,8 @@ struct DetectFacesCommand: AsyncParsableCommand {
             .addNeedsReprocessingColumn,
             .addHighThresholdFlag,
             .addIsIgnoredColumn,
-            .createAutoMergeEventTables
+            .createAutoMergeEventTables,
+            .createFacePersonBlocks
         ])
         
         // Initialize services

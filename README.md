@@ -120,9 +120,13 @@ After running the pipeline, execute `sync-thematic-albums` to mirror positive ma
 
 ## Roadmap / TODO
 
-### recommended thematic album workflow
+### document a recommended thematic album workflow
 
 document a recommended AI thematic album workflow (pull into ai-organizer folder, and then curate into your own albums). this works around the fact that AI isn't a great curator, but allows you to work from a more approachable set of photos for curation.
+
+### "visit" pipeline
+
+- should it include all the photos in the time window?
 
 ### travel pipeline (temporal)
 

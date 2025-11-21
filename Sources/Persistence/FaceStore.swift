@@ -753,6 +753,33 @@ public final class FaceStore {
         _ = try statement.execute(parameterValues: [faceID.uuidString, useHighThreshold])
     }
 
+    public func blockFace(_ faceID: UUID, fromPerson personID: UUID, connection: Connection) throws {
+        let sql = """
+        INSERT INTO face_person_blocks (face_id, person_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute(parameterValues: [faceID.uuidString, personID.uuidString])
+    }
+
+    public func blockedPersons(forFace faceID: UUID, connection: Connection) throws -> Set<UUID> {
+        let sql = "SELECT person_id FROM face_person_blocks WHERE face_id = $1;"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        let cursor = try statement.execute(parameterValues: [faceID.uuidString])
+        var blocked: Set<UUID> = []
+        for row in cursor {
+            let resolved = try row.get()
+            if let pidString = try resolved.columns[0].optionalString(),
+               let pid = UUID(uuidString: pidString) {
+                blocked.insert(pid)
+            }
+        }
+        return blocked
+    }
+
     public func resetUnnamedUnmergedPersons(connection: Connection) throws -> Int {
         // Count persons to be reset (unnamed, unmerged, not ignored, and not referenced by other persons)
         let countSQL = """
