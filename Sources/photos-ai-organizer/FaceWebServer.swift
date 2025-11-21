@@ -2190,7 +2190,7 @@ private enum FaceWebAssets {
     });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') closeContextMenus();
-    });
+    }, { capture: true });
 
     function openAssignPopover(face, evt) {
       currentContextFace = face;
@@ -2226,6 +2226,7 @@ private enum FaceWebAssets {
         } else if (e.key === 'Escape') {
           closeContextMenus();
         }
+        e.stopPropagation();
       };
 
       function refreshAssignSuggestions(query) {
