@@ -14,6 +14,10 @@ travel_albums:
   folder_name: Travel Albums
   pattern: "{location} {start} – {end}"
 
+visit_albums:
+  folder_name: Visits
+  pattern: "Visit {people} {start} - {end}"
+
 thematic_folder: "Thematic Albums"
 thematic_albums:
   - name: "Autumn Colors"

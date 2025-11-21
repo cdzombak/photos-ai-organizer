@@ -1,0 +1,219 @@
+import Foundation
+import ArgumentParser
+import Core
+import Persistence
+import CoreLocation
+import PostgresClientKit
+import CryptoKit
+
+struct ClusterVisitsCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "cluster-visits",
+        abstract: "Identify likely visit windows from face appearances",
+        discussion: "Find 48h windows with multiple rare/non-household faces co-occurring, using face clustering output."
+    )
+
+    @Option(name: [.short, .customLong("config"), .customLong("config-path")], help: "Path to configuration file")
+    var configPath: String = "photos-config.yml"
+
+    init() {}
+
+    init(configPath: String) {
+        self.configPath = configPath
+    }
+
+    func run() async throws {
+        print("🧭 Starting visit clustering pipeline...")
+
+        let config = try PostgresConfig.fromConfigFile(path: configPath)
+        let connection = try Connection(configuration: config.makeConnectionConfiguration())
+        defer { connection.close() }
+
+        let migrationRunner = MigrationRunner(connection: connection)
+        try migrationRunner.run([.createFaceTables, .createVisitClusters])
+
+        let faceStore = FaceStore(config: config)
+        let visitStore = VisitClusterStore(config: config)
+
+        let appearances = try faceStore.fetchPersonAppearances(connection: connection)
+        guard !appearances.isEmpty else {
+            print("No face appearances with person assignments found. Run detect-faces + cluster-faces first.")
+            return
+        }
+
+        print("Fetched \(appearances.count) face appearances; building rarity baselines...")
+        let stats = VisitStatistics(appearances: appearances)
+        let rarePersons = stats.rarePersons
+        let householdPersons = stats.householdPersons
+
+        print("   Persons: \(stats.personCounts.count); rare: \(rarePersons.count); household: \(householdPersons.count)")
+
+        let detector = VisitWindowDetector(
+            windowHours: 48,
+            mergeGapHours: 12,
+            minRarePersons: 2,
+            minFaces: 6,
+            minAssets: 3
+        )
+
+        let clusters = detector.detectClusters(
+            appearances: appearances,
+            rarePersons: rarePersons,
+            householdPersons: householdPersons
+        )
+
+        guard !clusters.isEmpty else {
+            print("No visit clusters detected.")
+            return
+        }
+
+        try visitStore.ensureTablesExist(connection: connection)
+        try visitStore.persist(clusters, connection: connection)
+
+        let formatter = ISO8601DateFormatter()
+        print("✅ Stored \(clusters.count) visit clusters:")
+        for cluster in clusters {
+            let start = formatter.string(from: cluster.windowStart)
+            let end = formatter.string(from: cluster.windowEnd)
+            print("   - \(start) → \(end): \(cluster.rarePersonIDs.count) rare people, \(cluster.assetIDs.count) assets, score \(String(format: "%.2f", cluster.score))")
+        }
+    }
+}
+
+private struct VisitStatistics {
+    let personCounts: [UUID: Int]
+    let rarePersons: Set<UUID>
+    let householdPersons: Set<UUID>
+
+    init(appearances: [FaceStore.PersonAppearance]) {
+        var counts: [UUID: Int] = [:]
+        for appearance in appearances {
+            counts[appearance.personID, default: 0] += 1
+        }
+        self.personCounts = counts
+
+        let total = counts.values.reduce(0, +)
+        let mean = counts.isEmpty ? 0 : Double(total) / Double(counts.count)
+        let highFreqCutoff = max(20, Int(mean * 2.5))
+        let rareCutoff = max(2, Int(mean * 0.5))
+
+        var rare: Set<UUID> = []
+        var household: Set<UUID> = []
+        for (personID, count) in counts {
+            if count >= highFreqCutoff {
+                household.insert(personID)
+            } else if count <= rareCutoff {
+                rare.insert(personID)
+            }
+        }
+        self.rarePersons = rare.subtracting(household)
+        self.householdPersons = household
+    }
+}
+
+private struct VisitWindowDetector {
+    let windowHours: Int
+    let mergeGapHours: Int
+    let minRarePersons: Int
+    let minFaces: Int
+    let minAssets: Int
+
+    func detectClusters(
+        appearances: [FaceStore.PersonAppearance],
+        rarePersons: Set<UUID>,
+        householdPersons: Set<UUID>
+    ) -> [VisitCluster] {
+        let events = appearances.sorted { $0.creationDate < $1.creationDate }
+        guard let firstDate = events.first?.creationDate else { return [] }
+
+        let strideSeconds = TimeInterval(windowHours * 3600 / 4)
+        let windowSeconds = TimeInterval(windowHours * 3600)
+        let mergeGapSeconds = TimeInterval(mergeGapHours * 3600)
+
+        var cursorDate = firstDate
+        var candidates: [VisitCluster] = []
+
+        while cursorDate <= (events.last?.creationDate ?? cursorDate) {
+            let windowStart = cursorDate
+            let windowEnd = windowStart.addingTimeInterval(windowSeconds)
+
+            let subset = events.filter { $0.creationDate >= windowStart && $0.creationDate < windowEnd }
+            if subset.isEmpty {
+                cursorDate = cursorDate.addingTimeInterval(strideSeconds)
+                continue
+            }
+
+            let assetIDs = Set(subset.map { $0.assetID })
+            let people = subset.map { $0.personID }
+            let rarePeople = Set(people.filter { rarePersons.contains($0) })
+            let household = Set(people.filter { householdPersons.contains($0) })
+
+            let score = scoreWindow(rareCount: rarePeople.count, totalFaces: subset.count, householdCount: household.count)
+            if rarePeople.count >= minRarePersons && subset.count >= minFaces && assetIDs.count >= minAssets {
+                let cluster = VisitCluster(
+                    windowStart: windowStart,
+                    windowEnd: windowEnd,
+                    assetIDs: Array(assetIDs),
+                    personIDs: Array(Set(people)),
+                    rarePersonIDs: Array(rarePeople),
+                    score: score
+                )
+                candidates.append(cluster.withID(deterministicID(for: cluster)))
+            }
+
+            cursorDate = cursorDate.addingTimeInterval(strideSeconds)
+        }
+
+        let merged = mergeOverlapping(candidates.sorted { $0.windowStart < $1.windowStart }, gap: mergeGapSeconds)
+        return merged.sorted { $0.score > $1.score }
+    }
+
+    private func scoreWindow(rareCount: Int, totalFaces: Int, householdCount: Int) -> Double {
+        let density = Double(totalFaces)
+        let rareScore = Double(rareCount) * 2.0
+        let householdPenalty = householdCount > 0 ? log(Double(householdCount) + 1) : 0
+        return (rareScore + log(density + 1)) - householdPenalty
+    }
+
+    private func mergeOverlapping(_ clusters: [VisitCluster], gap: TimeInterval) -> [VisitCluster] {
+        var result: [VisitCluster] = []
+        for cluster in clusters {
+            if let last = result.last, cluster.windowStart <= last.windowEnd.addingTimeInterval(gap) {
+                let newStart = min(last.windowStart, cluster.windowStart)
+                let newEnd = max(last.windowEnd, cluster.windowEnd)
+                let mergedAssets = Array(Set(last.assetIDs).union(cluster.assetIDs))
+                let mergedPersons = Array(Set(last.personIDs).union(cluster.personIDs))
+                let mergedRare = Array(Set(last.rarePersonIDs).union(cluster.rarePersonIDs))
+                let mergedScore = max(last.score, cluster.score)
+                let merged = VisitCluster(
+                    windowStart: newStart,
+                    windowEnd: newEnd,
+                    assetIDs: mergedAssets,
+                    personIDs: mergedPersons,
+                    rarePersonIDs: mergedRare,
+                    score: mergedScore
+                )
+                result[result.count - 1] = merged.withID(deterministicID(for: merged))
+            } else {
+                result.append(cluster)
+            }
+        }
+        return result
+    }
+
+    private func deterministicID(for cluster: VisitCluster) -> UUID {
+        let formatter = ISO8601DateFormatter()
+        let payload = [
+            formatter.string(from: cluster.windowStart),
+            formatter.string(from: cluster.windowEnd),
+            cluster.rarePersonIDs
+                .map(\.uuidString)
+                .sorted()
+                .joined(separator: "|")
+        ].joined(separator: "||")
+        let digest = SHA256.hash(data: Data(payload.utf8))
+        let bytes = Array(digest.prefix(16))
+        let uuidBytes = uuid_t(bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15])
+        return UUID(uuid: uuidBytes)
+    }
+}

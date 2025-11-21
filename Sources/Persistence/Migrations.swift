@@ -144,6 +144,35 @@ public extension MigrationStep {
             """
         ]
     )
+
+    static let createVisitClusters = MigrationStep(
+        identifier: "009_create_visit_clusters",
+        statements: [
+            """
+            CREATE TABLE IF NOT EXISTS visit_clusters (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                window_start TIMESTAMP WITH TIME ZONE NOT NULL,
+                window_end TIMESTAMP WITH TIME ZONE NOT NULL,
+                asset_ids JSONB NOT NULL,
+                person_ids JSONB NOT NULL,
+                rare_person_ids JSONB NOT NULL,
+                score DOUBLE PRECISION NOT NULL DEFAULT 0,
+                album_local_id TEXT,
+                album_removed_at TIMESTAMP WITH TIME ZONE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            );
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_visit_clusters_window ON visit_clusters(window_start, window_end);
+            """,
+            """
+            ALTER TABLE visit_clusters ADD COLUMN IF NOT EXISTS album_local_id TEXT;
+            """,
+            """
+            ALTER TABLE visit_clusters ADD COLUMN IF NOT EXISTS album_removed_at TIMESTAMP WITH TIME ZONE;
+            """
+        ]
+    )
 }
 
 protocol SQLCommandExecutor {

@@ -15,6 +15,8 @@ public struct PostgresConfig {
     public let mapbox: MapboxConfig?
     public let albumFolderName: String?
     public let albumNamePattern: String?
+    public let visitAlbumFolderName: String?
+    public let visitAlbumNamePattern: String?
     public let thematicAlbums: [ThematicAlbum]?
     public let thematicFolderName: String?
     public let gradingAI: AIConfig?
@@ -91,6 +93,8 @@ public struct PostgresConfig {
             mapbox: rawConfig.mapbox,
             albumFolderName: rawConfig.travelAlbums?.folderName ?? "Travel Clusters",
             albumNamePattern: rawConfig.travelAlbums?.pattern,
+            visitAlbumFolderName: rawConfig.visitAlbums?.folderName ?? "Visits",
+            visitAlbumNamePattern: rawConfig.visitAlbums?.pattern ?? "Visit {start} - {end}",
             thematicAlbums: rawConfig.thematicAlbums,
             thematicFolderName: rawConfig.thematicFolder ?? "Thematic Albums",
             gradingAI: rawConfig.ai?.grade,
@@ -164,6 +168,7 @@ public struct PostgresConfig {
         public let postgres: Postgres
         public let mapbox: MapboxConfig?
         public let travelAlbums: AlbumConfig?
+        public let visitAlbums: AlbumConfig?
         public let thematicAlbums: [ThematicAlbum]?
         public let thematicFolder: String?
         public let ai: AISection?
@@ -174,6 +179,7 @@ public struct PostgresConfig {
             case postgres
             case mapbox
             case travelAlbums = "travel_albums"
+            case visitAlbums = "visit_albums"
             case thematicAlbums = "thematic_albums"
             case thematicFolder = "thematic_folder"
             case ai

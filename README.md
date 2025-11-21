@@ -15,6 +15,8 @@ Swift CLI that syncs Apple Photos metadata into PostgreSQL and analyzes it to or
 - `cluster-faces` – build person clusters from stored face embeddings; safe to rerun as you iterate.
 - `serve-faces` – browse/merge/split detected persons and faces in a web UI (default port 8081; override with `--port`).
 - `run-thematic-pipeline` – classify favorite/highly rated photos into configured thematic albums via AI (`--concurrency N`).
+- `cluster-visits` – identify 48h windows containing multiple rare, non-household faces.
+- `sync-visit-albums` – mirror visit clusters into Photos albums (preserves manual edits; see safety flags below).
 - `sync-thematic-albums` – create/update thematic Photos albums based on AI classifications while respecting manual edits (`--restore-removals`, `--danger-remove`).
 
 Global flags: `--config <file>` (defaults to `photos-config.yml`), `--help`/`-h`.
@@ -39,6 +41,7 @@ Key sections:
 - `postgres`: connection info + metadata table name
 - `mapbox`: access token for travel geocoding (optional if you skip travel pipeline)
 - `travel_albums`: folder/name pattern for synced travel albums
+- `visit_albums`: optional folder/pattern for synced visit albums (defaults to folder "Visits", pattern "Visit {start} - {end}")
 - `thematic_albums`: list of objects with `name` and `description` describing each thematic album presented to the AI
 - `thematic_folder`: folder name where thematic albums are synced in Photos
 - `ai.grade`: `base_url`, `api_key`, `model` for the grading pipeline
@@ -59,6 +62,10 @@ swift run photos-ai-organizer detect-faces --config photos-config.yml --concurre
 swift run photos-ai-organizer cluster-faces --config photos-config.yml
 #    - (Optional) Review/merge/split clusters in the browser:
 swift run photos-ai-organizer serve-faces --config photos-config.yml --port 8081
+
+# 1b) Detect "visit" windows with rare faces (optional, after clustering):
+swift run photos-ai-organizer cluster-visits --config photos-config.yml
+swift run photos-ai-organizer sync-visit-albums --config photos-config.yml
 
 # 2) Run the travel pipeline and sync results to Photos app:
 swift run photos-ai-organizer run-travel-pipeline --config photos-config.yml --concurrency 10
@@ -94,6 +101,15 @@ The face pipeline detects faces using Vision, generates embeddings with FaceNet,
 - **Cluster:** `swift run photos-ai-organizer cluster-faces --config photos-config.yml` to group faces into people using `face_recognition.similarity_threshold`. Safe to rerun after adjusting thresholds or merging/splitting persons.
 - **Review:** `swift run photos-ai-organizer serve-faces --config photos-config.yml --port 8081` opens a browser UI to browse persons, mark a favorite face, merge suggestions, and flag clusters for reprocessing. Restart `cluster-faces` after adjustments to apply them.
 
+## Visit (Face-Based) Pipeline
+
+Find 48-hour windows where you appear with people you don’t usually see.
+
+- **Inputs:** requires `detect-faces` + `cluster-faces` so faces are assigned to persons.
+- **Commands:** `swift run photos-ai-organizer cluster-visits --config photos-config.yml` then `swift run photos-ai-organizer sync-visit-albums --config photos-config.yml`
+- **Heuristics:** Builds per-person baseline frequency, treats very common people as household, and considers infrequent people “rare.” Windows are 48h with a 12h stride/merge; a visit is kept when it has ≥2 rare people, ≥6 faces, and ≥3 assets. Score boosts for rare co-occurrence and downranks household-heavy windows.
+- **Output:** Writes clusters to `visit_clusters` (Postgres) with window start/end, involved assets, people, rare people, and a score for ordering. `sync-visit-albums` mirrors them into Photos under `visit_albums.folder_name` (default "Visits"), respecting the same safety flags as travel/thematic sync.
+
 ## Thematic Analysis Pipeline
 
 First, the `grade` pipeline asks an LLM to assign a numeric grade to each photo. This prevents including bad photos in your thematic albums. You can preview graded photos via the `serve-grades` command.
@@ -107,16 +123,6 @@ After running the pipeline, execute `sync-thematic-albums` to mirror positive ma
 ### recommended thematic album workflow
 
 document a recommended AI thematic album workflow (pull into ai-organizer folder, and then curate into your own albums). this works around the fact that AI isn't a great curator, but allows you to work from a more approachable set of photos for curation.
-
-### (temporal) visit (face-based) pipeline
-
-- establish face baseline
-- cluster high numbers of atypical face appearances over 2-day windows
-
-#### required support: face DB
-
-- face (re)recognition
-- web UI for naming and merging
 
 ### travel pipeline (temporal)
 

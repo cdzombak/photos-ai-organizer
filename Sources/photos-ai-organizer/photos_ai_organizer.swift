@@ -19,6 +19,8 @@ enum CLICommand: String {
     case `import` = "import"
     case runTravelPipeline = "run-travel-pipeline"
     case syncTravelAlbums = "sync-travel-albums"
+    case syncVisitAlbums = "sync-visit-albums"
+    case clusterVisits = "cluster-visits"
     case runThematicPipeline = "run-thematic-pipeline"
     case syncThematicAlbums = "sync-thematic-albums"
     case grade = "grade"
@@ -94,16 +96,16 @@ struct CLIOptions {
                 guard let currentCommand = command else {
                     throw ExportError.invalidArgument("Specify a subcommand before --restore-removals")
                 }
-                guard currentCommand == .syncTravelAlbums || currentCommand == .syncThematicAlbums else {
-                    throw ExportError.invalidArgument("--restore-removals can only be used with 'sync-travel-albums' or 'sync-thematic-albums'")
+                guard currentCommand == .syncTravelAlbums || currentCommand == .syncThematicAlbums || currentCommand == .syncVisitAlbums else {
+                    throw ExportError.invalidArgument("--restore-removals can only be used with 'sync-travel-albums', 'sync-visit-albums', or 'sync-thematic-albums'")
                 }
                 restoreRemovals = true
             case "--danger-remove":
                 guard let currentCommand = command else {
                     throw ExportError.invalidArgument("Specify a subcommand before --danger-remove")
                 }
-                guard currentCommand == .syncTravelAlbums || currentCommand == .syncThematicAlbums else {
-                    throw ExportError.invalidArgument("--danger-remove can only be used with 'sync-travel-albums' or 'sync-thematic-albums'")
+                guard currentCommand == .syncTravelAlbums || currentCommand == .syncThematicAlbums || currentCommand == .syncVisitAlbums else {
+                    throw ExportError.invalidArgument("--danger-remove can only be used with 'sync-travel-albums', 'sync-visit-albums', or 'sync-thematic-albums'")
                 }
                 dangerRemove = true
             case "--port":
@@ -129,7 +131,7 @@ struct CLIOptions {
                 if command == nil, let parsed = CLICommand(rawValue: argument) {
                     command = parsed
                 } else if command == nil {
-                    throw ExportError.invalidArgument("Unknown subcommand '\(argument)'. Try 'import', 'run-travel-pipeline', 'sync-travel-albums', '\(FacePipelineSupport.detectCommandName)', '\(FacePipelineSupport.clusterCommandName)', or 'help'.")
+                    throw ExportError.invalidArgument("Unknown subcommand '\(argument)'. Try 'import', 'run-travel-pipeline', 'sync-travel-albums', 'sync-visit-albums', 'cluster-visits', '\(FacePipelineSupport.detectCommandName)', '\(FacePipelineSupport.clusterCommandName)', or 'help'.")
                 } else {
                     throw ExportError.invalidArgument("Unexpected argument '\(argument)'.")
                 }
@@ -667,6 +669,17 @@ struct PhotosMetadataExporterCLI {
                 )
                 let summary = try syncer.run()
                 print(summary)
+            case .clusterVisits:
+                let command = ClusterVisitsCommand(configPath: options.configPath)
+                try await command.run()
+            case .syncVisitAlbums:
+                let syncer = VisitAlbumSynchronizer(
+                    config: config,
+                    restoreRemovals: options.restoreRemovals,
+                    dangerRemove: options.dangerRemove
+                )
+                let summary = try syncer.run()
+                print(summary)
             case .grade:
                 let grader = PhotoGradeCommand(config: config)
                 let summary = try grader.run(concurrency: options.gradeConcurrency ?? 10)
@@ -736,6 +749,8 @@ SUBCOMMANDS:
   import               Scan Photos and upsert metadata into Postgres.
   run-travel-pipeline  Build/annotate travel clusters and persist results.
   sync-travel-albums   Mirror stored clusters into Photos albums. (--restore-removals, --danger-remove)
+  sync-visit-albums    Mirror visit clusters into Photos albums. (--restore-removals, --danger-remove)
+  cluster-visits       Detect visit windows with uncommon faces over 48h windows.
   run-thematic-pipeline Apply thematic albums via AI classifications. (--concurrency N)
   sync-thematic-albums  Create/update thematic albums in Photos. (--restore-removals, --danger-remove)
   grade                Send Photos to an AI model for 0–10 quality grading. (--concurrency N)

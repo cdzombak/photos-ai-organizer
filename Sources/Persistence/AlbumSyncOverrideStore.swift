@@ -5,6 +5,7 @@ public final class AlbumSyncOverrideStore {
     public enum Scope: String {
         case travel
         case thematic
+        case visits
     }
 
     public enum Change: String {

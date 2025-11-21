@@ -173,6 +173,54 @@ public struct TravelCluster {
     }
 }
 
+public struct VisitCluster: Sendable {
+    public let id: UUID
+    public let windowStart: Date
+    public let windowEnd: Date
+    public let assetIDs: [String]
+    public let personIDs: [UUID]
+    public let rarePersonIDs: [UUID]
+    public let score: Double
+    public let albumLocalID: String?
+    public let albumRemovedAt: Date?
+
+    public init(
+        id: UUID = UUID(),
+        windowStart: Date,
+        windowEnd: Date,
+        assetIDs: [String],
+        personIDs: [UUID],
+        rarePersonIDs: [UUID],
+        score: Double,
+        albumLocalID: String? = nil,
+        albumRemovedAt: Date? = nil
+    ) {
+        self.id = id
+        self.windowStart = windowStart
+        self.windowEnd = windowEnd
+        self.assetIDs = assetIDs
+        self.personIDs = personIDs
+        self.rarePersonIDs = rarePersonIDs
+        self.score = score
+        self.albumLocalID = albumLocalID
+        self.albumRemovedAt = albumRemovedAt
+    }
+
+    public func withID(_ id: UUID) -> VisitCluster {
+        VisitCluster(
+            id: id,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            assetIDs: assetIDs,
+            personIDs: personIDs,
+            rarePersonIDs: rarePersonIDs,
+            score: score,
+            albumLocalID: albumLocalID,
+            albumRemovedAt: albumRemovedAt
+        )
+    }
+}
+
 public struct TravelWindow {
     public let id: Int
     public let startDate: Date

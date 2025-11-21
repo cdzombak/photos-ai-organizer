@@ -607,6 +607,73 @@ public final class FaceStore {
         return persons
     }
 
+    public struct PersonAppearance {
+        public let personID: UUID
+        public let assetID: String
+        public let creationDate: Date
+    }
+
+    public func fetchPersonAppearances(connection: Connection) throws -> [PersonAppearance] {
+        let sql = """
+        SELECT fd.person_id, fd.asset_id, m.creation_date
+        FROM face_detections fd
+        JOIN \(config.tableName) m ON fd.asset_id = m.asset_id
+        JOIN persons p ON fd.person_id = p.id
+        WHERE fd.person_id IS NOT NULL
+          AND p.is_ignored = FALSE
+          AND p.name IS NOT NULL
+          AND trim(p.name) <> ''
+          AND m.creation_date IS NOT NULL
+        ORDER BY m.creation_date ASC;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute()
+        var appearances: [PersonAppearance] = []
+
+        for row in cursor {
+            let resolved = try row.get()
+            guard
+                let personIDString = try resolved.columns[0].optionalString(),
+                let personID = UUID(uuidString: personIDString),
+                let assetID = try resolved.columns[1].optionalString(),
+                let createdAt = try resolved.columns[2].optionalTimestampWithTimeZone()?.date
+            else { continue }
+
+            appearances.append(PersonAppearance(
+                personID: personID,
+                assetID: assetID,
+                creationDate: createdAt
+            ))
+        }
+
+        return appearances
+    }
+
+    public func fetchPersonNames(for ids: [UUID], connection: Connection) throws -> [UUID: String] {
+        guard !ids.isEmpty else { return [:] }
+        let placeholders = ids.enumerated().map { "$\($0.offset + 1)" }.joined(separator: ", ")
+        let sql = "SELECT id, name FROM persons WHERE id IN (\(placeholders));"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let params = ids.map(\.uuidString)
+        let cursor = try statement.execute(parameterValues: params)
+        var names: [UUID: String] = [:]
+        for row in cursor {
+            let resolved = try row.get()
+            guard
+                let idString = try resolved.columns[0].optionalString(),
+                let id = UUID(uuidString: idString),
+                let name = try resolved.columns[1].optionalString(),
+                !name.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty
+            else { continue }
+            names[id] = name
+        }
+        return names
+    }
+
     public func updateFavoriteFace(_ personID: UUID, faceID: UUID?, connection: Connection) throws {
         let sql = """
         UPDATE persons
