@@ -261,65 +261,6 @@ public struct FaceClusteringService {
         return votePercentage >= votingThreshold ? winningPersonID : nil
     }
 
-    public func clusterFacesIncremental(connection: Connection, newFaces: [FaceDetection]) async throws -> [Person] {
-        var newPersons: [Person] = []
-        
-        for face in newFaces {
-            guard let faceEmbedding = face.faceEmbedding else {
-                continue
-            }
-            
-            // Get all existing persons for comparison
-            let existingPersons = try faceStore.getAllActivePersons(connection: connection)
-            
-            var bestMatch: (person: Person?, similarity: Float) = (nil, 0.0)
-            
-            // Find best matching person
-            for person in existingPersons {
-                let personFaces = try faceStore.getFacesForPerson(
-                    person.id,
-                    includeMergedDescendants: true,
-                    connection: connection
-                )
-                
-                // Calculate average similarity with all faces of this person
-                var totalSimilarity: Float = 0.0
-                var faceCount = 0
-                
-                for personFace in personFaces {
-                    guard let personEmbedding = personFace.faceEmbedding else { continue }
-                    let similarity = recognitionService.compareFaces(faceEmbedding, personEmbedding)
-                    totalSimilarity += similarity
-                    faceCount += 1
-                }
-                
-                if faceCount > 0 {
-                    let averageSimilarity = totalSimilarity / Float(faceCount)
-                    if averageSimilarity >= similarityThreshold && averageSimilarity > bestMatch.similarity {
-                        bestMatch = (person, averageSimilarity)
-                    }
-                }
-            }
-            
-            if let matchedPerson = bestMatch.person {
-                // Assign face to existing person
-                try faceStore.assignFaceToPerson(face.id, personID: matchedPerson.id, connection: connection)
-            } else {
-                // Create new person for this face
-                let newPerson = try faceStore.createPerson(connection: connection)
-                try faceStore.assignFaceToPerson(face.id, personID: newPerson.id, connection: connection)
-
-                // Set this first (most recent) face as the favorite/default for the new person
-                let personWithFavorite = newPerson.withFavoriteFaceID(face.id)
-                try faceStore.savePerson(personWithFavorite, connection: connection)
-
-                newPersons.append(personWithFavorite)
-            }
-        }
-        
-        return newPersons
-    }
-    
     public func reclusterAllFaces(connection: Connection) async throws -> [Person] {
         // Reset all person assignments
         let resetSQL = "UPDATE face_detections SET person_id = NULL WHERE person_id IS NOT NULL;"
