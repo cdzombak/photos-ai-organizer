@@ -2166,7 +2166,19 @@ private enum FaceWebAssets {
       }
     });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeContextMenus();
+      if (e.key === 'Escape') {
+        // First close any context menus/popovers
+        const contextMenuWasOpen = !faceContextMenu.classList.contains('hidden') ||
+                                   !faceAssignPopover.classList.contains('hidden');
+        closeContextMenus();
+        if (contextMenuWasOpen) return;
+
+        // Then close drawer if open (but not if editing name - that has its own handler)
+        const drawer = document.getElementById('drawer');
+        if (!drawer.classList.contains('hidden') && !state.isEditingName) {
+          closeDrawer();
+        }
+      }
     }, { capture: true });
 
     function openAssignPopover(face, evt) {
