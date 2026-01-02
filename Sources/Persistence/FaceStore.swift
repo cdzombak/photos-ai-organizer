@@ -634,11 +634,12 @@ public final class FaceStore {
         public let personID: UUID
         public let assetID: String
         public let creationDate: Date
+        public let faceQuality: Float?
     }
 
     public func fetchPersonAppearances(connection: Connection) throws -> [PersonAppearance] {
         let sql = """
-        SELECT fd.person_id, fd.asset_id, m.creation_date
+        SELECT fd.person_id, fd.asset_id, m.creation_date, fd.face_quality
         FROM face_detections fd
         JOIN \(config.tableName) m ON fd.asset_id = m.asset_id
         JOIN persons p ON fd.person_id = p.id
@@ -664,10 +665,13 @@ public final class FaceStore {
                 let createdAt = try resolved.columns[2].optionalTimestampWithTimeZone()?.date
             else { continue }
 
+            let faceQuality = try resolved.columns[3].optionalDouble().map { Float($0) }
+
             appearances.append(PersonAppearance(
                 personID: personID,
                 assetID: assetID,
-                creationDate: createdAt
+                creationDate: createdAt,
+                faceQuality: faceQuality
             ))
         }
 
