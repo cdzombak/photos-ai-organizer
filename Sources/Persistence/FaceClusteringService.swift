@@ -6,22 +6,6 @@ public struct FaceClusteringService {
     private struct PersonCentroid {
         var vector: [Float]
         var count: Int
-
-        mutating func update(with embedding: [Float]) {
-            guard !embedding.isEmpty else { return }
-            if vector.isEmpty {
-                vector = embedding
-                count = 1
-                return
-            }
-            guard vector.count == embedding.count else { return }
-            let newCount = count + 1
-            for index in vector.indices {
-                let delta = embedding[index] - vector[index]
-                vector[index] += delta / Float(newCount)
-            }
-            count = newCount
-        }
     }
 
     private let faceStore: FaceStore
@@ -130,34 +114,6 @@ public struct FaceClusteringService {
         }
         reporter.finish()
         return map
-    }
-    
-    private func bestMatch(for embedding: [Float], within candidates: [UUID: PersonCentroid]) -> UUID? {
-        var bestID: UUID?
-        var bestSimilarity: Float = similarityThreshold
-        for (id, centroid) in candidates {
-            let similarity = recognitionService.compareFaces(embedding, centroid.vector)
-            if similarity >= bestSimilarity {
-                bestSimilarity = similarity
-                bestID = id
-            }
-        }
-        return bestID
-    }
-
-    private func recomputeCentroids(
-        for personIDs: Set<UUID>,
-        centroids: inout [UUID: PersonCentroid],
-        connection: Connection
-    ) throws {
-        for personID in personIDs {
-            let faces = try faceStore.getFacesForPerson(personID, includeMergedDescendants: true, connection: connection)
-            if let centroid = makeCentroid(from: faces) {
-                centroids[personID] = centroid
-            } else {
-                centroids.removeValue(forKey: personID)
-            }
-        }
     }
 
     private func makeCentroid(from faces: [FaceDetection]) -> PersonCentroid? {
@@ -455,34 +411,6 @@ public struct FaceClusteringService {
         }
         guard count > 0 else { return 0.0 }
         return total / Float(count)
-    }
-    
-    // MARK: - Helper Methods
-    
-    private func computePersonSimilarity(_ person1: Person, _ person2: Person, connection: Connection) async throws -> Float {
-        let faces1 = try faceStore.getFacesForPerson(
-            person1.id,
-            includeMergedDescendants: true,
-            connection: connection
-        )
-        let faces2 = try faceStore.getFacesForPerson(
-            person2.id,
-            includeMergedDescendants: true,
-            connection: connection
-        )
-
-        guard !faces1.isEmpty, !faces2.isEmpty else {
-            return 0.0
-        }
-
-        // Compute centroids for both persons and compare those instead of all face pairs
-        // This changes complexity from O(m1 × m2) to O(m1 + m2) per person pair
-        guard let centroid1 = makeCentroid(from: faces1),
-              let centroid2 = makeCentroid(from: faces2) else {
-            return 0.0
-        }
-
-        return recognitionService.compareFaces(centroid1.vector, centroid2.vector)
     }
 }
 
