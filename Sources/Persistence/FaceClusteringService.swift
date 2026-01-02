@@ -314,7 +314,7 @@ public struct FaceClusteringService {
     }
 
     public func mergeDuplicatePersonsAutomatically(connection: Connection) async throws -> Int {
-        let mergeThreshold = min(1.0, similarityThreshold * 1.3)
+        let mergeThreshold = min(1.0, similarityThreshold * 1.5)
         print("   🔍 Searching for duplicate persons to merge...")
         let candidates = try await findPotentialDuplicates(connection: connection)
         print("   📋 Found \(candidates.count) potential duplicate pairs")
