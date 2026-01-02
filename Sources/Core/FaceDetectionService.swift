@@ -279,6 +279,9 @@ public struct FaceDetectionService {
         return Float(intersectionArea / unionArea)
     }
 
+    /// Standard size for sharpness normalization - all faces resized to this before computing
+    private static let sharpnessNormalizationSize = 128
+
     private func computeSharpness(for observation: VNFaceObservation, in cgImage: CGImage) -> Float {
         let imageWidth = CGFloat(cgImage.width)
         let imageHeight = CGFloat(cgImage.height)
@@ -295,8 +298,32 @@ public struct FaceDetectionService {
             return 50.0 // Default mid-range sharpness
         }
 
+        // Resize to standard size for consistent sharpness comparison across different face sizes
+        guard let normalizedFace = resizeImage(croppedFace, to: Self.sharpnessNormalizationSize) else {
+            return computeLaplacianVariance(croppedFace) // Fall back to unnormalized if resize fails
+        }
+
         // Convert to grayscale and compute Laplacian variance
-        return computeLaplacianVariance(croppedFace)
+        return computeLaplacianVariance(normalizedFace)
+    }
+
+    private func resizeImage(_ image: CGImage, to size: Int) -> CGImage? {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: nil,
+            width: size,
+            height: size,
+            bitsPerComponent: 8,
+            bytesPerRow: size * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: size, height: size))
+        return context.makeImage()
     }
 
     private func computeLaplacianVariance(_ image: CGImage) -> Float {
