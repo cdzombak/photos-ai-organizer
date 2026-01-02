@@ -87,10 +87,13 @@ public struct FaceClusteringService {
                 // Try weighted voting first for robustness (uses quality scores)
                 var assignedPersonID = voteOnPerson(from: validNeighbors, votingThreshold: votingThreshold)
 
-                // If no voting consensus but we have valid neighbors, fall back to best match
-                // This prevents over-fragmentation when persons have few faces
-                if assignedPersonID == nil && !validNeighbors.isEmpty {
-                    assignedPersonID = validNeighbors.min(by: { $0.distance < $1.distance })?.personID
+                // If no voting consensus, only fall back to best match if it's very close
+                // This prevents misassignments when a person has few faces
+                if assignedPersonID == nil, let closest = validNeighbors.min(by: { $0.distance < $1.distance }) {
+                    let closeFallbackThreshold: Float = 0.2  // Only fall back if distance < 0.2 (similarity > 0.8)
+                    if closest.distance < closeFallbackThreshold {
+                        assignedPersonID = closest.personID
+                    }
                 }
 
                 if let personID = assignedPersonID, let _ = personLookup[personID] {
