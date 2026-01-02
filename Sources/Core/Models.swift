@@ -474,6 +474,53 @@ public struct Person {
     }
 }
 
+/// Represents quality metrics for a detected face.
+/// Used to weight faces during clustering - higher quality faces have more influence.
+public struct FaceQuality: Sendable {
+    /// Apple Vision's face capture quality score (0-1)
+    public let captureQuality: Float
+    /// Laplacian variance measuring image sharpness
+    public let sharpness: Float
+    /// Face area relative to image area (0-1)
+    public let faceSize: Float
+    /// Pose score based on eye alignment (0-1, 1=frontal)
+    public let poseScore: Float
+    /// Estimated yaw angle in radians (for debugging/storage)
+    public let poseYaw: Float?
+
+    /// Composite quality score (0-1), weighted combination of all factors
+    public var overallQuality: Float {
+        let captureWeight: Float = 0.4
+        let sharpnessWeight: Float = 0.2
+        let faceSizeWeight: Float = 0.2
+        let poseWeight: Float = 0.2
+
+        return captureQuality * captureWeight +
+               normalizedSharpness * sharpnessWeight +
+               faceSize * faceSizeWeight +
+               poseScore * poseWeight
+    }
+
+    /// Normalize sharpness to 0-1 range (values above 100 map to 1.0)
+    private var normalizedSharpness: Float {
+        min(sharpness / 100.0, 1.0)
+    }
+
+    public init(
+        captureQuality: Float,
+        sharpness: Float,
+        faceSize: Float,
+        poseScore: Float,
+        poseYaw: Float? = nil
+    ) {
+        self.captureQuality = captureQuality
+        self.sharpness = sharpness
+        self.faceSize = faceSize
+        self.poseScore = poseScore
+        self.poseYaw = poseYaw
+    }
+}
+
 public struct FaceDetection: Sendable {
     public let id: UUID
     public let assetID: String
@@ -483,6 +530,12 @@ public struct FaceDetection: Sendable {
     public var faceEmbedding: [Float]?
     public var useHighThresholdClustering: Bool
     public let createdAt: Date
+    /// Overall face quality score (0-1), used for weighted clustering
+    public var faceQuality: Float?
+    /// Sharpness metric (Laplacian variance), stored for debugging
+    public var sharpness: Float?
+    /// Estimated yaw angle in radians, stored for debugging
+    public var poseYaw: Float?
 
     public init(
         id: UUID = UUID(),
@@ -492,7 +545,10 @@ public struct FaceDetection: Sendable {
         confidence: Float,
         faceEmbedding: [Float]? = nil,
         useHighThresholdClustering: Bool = false,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        faceQuality: Float? = nil,
+        sharpness: Float? = nil,
+        poseYaw: Float? = nil
     ) {
         self.id = id
         self.assetID = assetID
@@ -502,6 +558,9 @@ public struct FaceDetection: Sendable {
         self.faceEmbedding = faceEmbedding
         self.useHighThresholdClustering = useHighThresholdClustering
         self.createdAt = createdAt
+        self.faceQuality = faceQuality
+        self.sharpness = sharpness
+        self.poseYaw = poseYaw
     }
 
     public func withPersonID(_ personID: UUID?) -> FaceDetection {
@@ -513,7 +572,10 @@ public struct FaceDetection: Sendable {
             confidence: confidence,
             faceEmbedding: faceEmbedding,
             useHighThresholdClustering: useHighThresholdClustering,
-            createdAt: createdAt
+            createdAt: createdAt,
+            faceQuality: faceQuality,
+            sharpness: sharpness,
+            poseYaw: poseYaw
         )
     }
 
@@ -526,7 +588,26 @@ public struct FaceDetection: Sendable {
             confidence: confidence,
             faceEmbedding: faceEmbedding,
             useHighThresholdClustering: useHighThresholdClustering,
-            createdAt: createdAt
+            createdAt: createdAt,
+            faceQuality: faceQuality,
+            sharpness: sharpness,
+            poseYaw: poseYaw
+        )
+    }
+
+    public func withFaceQuality(_ quality: FaceQuality) -> FaceDetection {
+        FaceDetection(
+            id: id,
+            assetID: assetID,
+            personID: personID,
+            boundingBox: boundingBox,
+            confidence: confidence,
+            faceEmbedding: faceEmbedding,
+            useHighThresholdClustering: useHighThresholdClustering,
+            createdAt: createdAt,
+            faceQuality: quality.overallQuality,
+            sharpness: quality.sharpness,
+            poseYaw: quality.poseYaw
         )
     }
 }

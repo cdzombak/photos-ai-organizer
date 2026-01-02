@@ -46,17 +46,21 @@ public final class FaceStore {
     public func saveFaceDetection(_ detection: FaceDetection, connection: Connection) throws {
         let sql = """
         INSERT INTO face_detections (
-            id, asset_id, person_id, bounding_x, bounding_y, 
-            bounding_width, bounding_height, confidence, face_embedding, created_at
+            id, asset_id, person_id, bounding_x, bounding_y,
+            bounding_width, bounding_height, confidence, face_embedding, created_at,
+            face_quality, sharpness, pose_yaw
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (id) DO UPDATE SET
             person_id = EXCLUDED.person_id,
-            face_embedding = EXCLUDED.face_embedding;
+            face_embedding = EXCLUDED.face_embedding,
+            face_quality = COALESCE(EXCLUDED.face_quality, face_detections.face_quality),
+            sharpness = COALESCE(EXCLUDED.sharpness, face_detections.sharpness),
+            pose_yaw = COALESCE(EXCLUDED.pose_yaw, face_detections.pose_yaw);
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
-        
+
         // Convert embedding to JSON string for storage
         let embeddingJson: String?
         if let embedding = detection.faceEmbedding {
@@ -64,7 +68,7 @@ public final class FaceStore {
         } else {
             embeddingJson = nil
         }
-        
+
         let params: [PostgresValueConvertible?] = [
             detection.id.uuidString,
             detection.assetID,
@@ -75,7 +79,10 @@ public final class FaceStore {
             Double(detection.boundingBox.size.height),
             Double(detection.confidence),
             embeddingJson,
-            PostgresTimestampWithTimeZone(date: detection.createdAt)
+            PostgresTimestampWithTimeZone(date: detection.createdAt),
+            detection.faceQuality.map { Double($0) },
+            detection.sharpness.map { Double($0) },
+            detection.poseYaw.map { Double($0) }
         ]
         _ = try statement.execute(parameterValues: params)
     }
@@ -83,7 +90,8 @@ public final class FaceStore {
     public func getUnmatchedFaces(connection: Connection, limit: Int = 1000) throws -> [FaceDetection] {
         let sql = """
         SELECT id, asset_id, person_id, bounding_x, bounding_y,
-               bounding_width, bounding_height, confidence, face_embedding::text, created_at, use_high_threshold_clustering
+               bounding_width, bounding_height, confidence, face_embedding::text, created_at,
+               use_high_threshold_clustering, face_quality, sharpness, pose_yaw
         FROM face_detections
         WHERE person_id IS NULL
         ORDER BY created_at DESC
@@ -123,6 +131,9 @@ public final class FaceStore {
             }
 
             let useHighThresholdClustering = try resolved.columns[10].optionalBool() ?? false
+            let faceQuality = try resolved.columns[11].optionalDouble().map { Float($0) }
+            let sharpness = try resolved.columns[12].optionalDouble().map { Float($0) }
+            let poseYaw = try resolved.columns[13].optionalDouble().map { Float($0) }
 
             let boundingBox = CGRect(
                 x: boundingX,
@@ -139,7 +150,10 @@ public final class FaceStore {
                 confidence: Float(confidence),
                 faceEmbedding: faceEmbedding,
                 useHighThresholdClustering: useHighThresholdClustering,
-                createdAt: createdAt
+                createdAt: createdAt,
+                faceQuality: faceQuality,
+                sharpness: sharpness,
+                poseYaw: poseYaw
             ))
         }
 
@@ -185,15 +199,17 @@ public final class FaceStore {
                 JOIN person_tree pt ON p.merged_into = pt.id
             )
             SELECT id, asset_id, person_id, bounding_x, bounding_y,
-                   bounding_width, bounding_height, confidence, face_embedding::text, created_at
+                   bounding_width, bounding_height, confidence, face_embedding::text, created_at,
+                   face_quality, sharpness, pose_yaw
             FROM face_detections
             WHERE person_id IN (SELECT id FROM person_tree)
             ORDER BY created_at DESC;
             """
         } else {
             sql = """
-            SELECT id, asset_id, person_id, bounding_x, bounding_y, 
-                   bounding_width, bounding_height, confidence, face_embedding::text, created_at
+            SELECT id, asset_id, person_id, bounding_x, bounding_y,
+                   bounding_width, bounding_height, confidence, face_embedding::text, created_at,
+                   face_quality, sharpness, pose_yaw
             FROM face_detections
             WHERE person_id = $1
             ORDER BY created_at DESC;
@@ -201,10 +217,10 @@ public final class FaceStore {
         }
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
-        
+
         let cursor = try statement.execute(parameterValues: [personID.uuidString])
         var detections: [FaceDetection] = []
-        
+
         for row in cursor {
             let resolved = try row.get()
             guard let idString = try resolved.columns[0].optionalString(),
@@ -218,7 +234,7 @@ public final class FaceStore {
                   let createdAt = try resolved.columns[9].optionalTimestampWithTimeZone()?.date else {
                 continue
             }
-            
+
             // Parse embedding from JSON
             let faceEmbedding: [Float]?
             if let embeddingJson = try resolved.columns[8].optionalString(),
@@ -228,14 +244,18 @@ public final class FaceStore {
             } else {
                 faceEmbedding = nil
             }
-            
+
+            let faceQuality = try resolved.columns[10].optionalDouble().map { Float($0) }
+            let sharpness = try resolved.columns[11].optionalDouble().map { Float($0) }
+            let poseYaw = try resolved.columns[12].optionalDouble().map { Float($0) }
+
             let boundingBox = CGRect(
                 x: boundingX,
                 y: boundingY,
                 width: boundingWidth,
                 height: boundingHeight
             )
-            
+
             detections.append(FaceDetection(
                 id: id,
                 assetID: assetID,
@@ -243,10 +263,13 @@ public final class FaceStore {
                 boundingBox: boundingBox,
                 confidence: Float(confidence),
                 faceEmbedding: faceEmbedding,
-                createdAt: createdAt
+                createdAt: createdAt,
+                faceQuality: faceQuality,
+                sharpness: sharpness,
+                poseYaw: poseYaw
             ))
         }
-        
+
         return detections
     }
 
@@ -853,18 +876,19 @@ public final class FaceStore {
 
     public func getFaceDetectionsForAsset(_ assetID: String, connection: Connection) throws -> [FaceDetection] {
         let sql = """
-        SELECT id, asset_id, person_id, bounding_x, bounding_y, 
-               bounding_width, bounding_height, confidence, face_embedding::text, created_at
+        SELECT id, asset_id, person_id, bounding_x, bounding_y,
+               bounding_width, bounding_height, confidence, face_embedding::text, created_at,
+               face_quality, sharpness, pose_yaw
         FROM face_detections
         WHERE asset_id = $1
         ORDER BY created_at DESC;
         """
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
-        
+
         let cursor = try statement.execute(parameterValues: [assetID])
         var detections: [FaceDetection] = []
-        
+
         for row in cursor {
             let resolved = try row.get()
             guard let idString = try resolved.columns[0].optionalString(),
@@ -877,10 +901,10 @@ public final class FaceStore {
                   let createdAt = try resolved.columns[9].optionalTimestampWithTimeZone()?.date else {
                 continue
             }
-            
+
             let personIDString = try resolved.columns[2].optionalString()
             let personID = personIDString.flatMap(UUID.init)
-            
+
             // Parse embedding from JSON
             let faceEmbedding: [Float]?
             if let embeddingJson = try resolved.columns[8].optionalString(),
@@ -890,14 +914,18 @@ public final class FaceStore {
             } else {
                 faceEmbedding = nil
             }
-            
+
+            let faceQuality = try resolved.columns[10].optionalDouble().map { Float($0) }
+            let sharpness = try resolved.columns[11].optionalDouble().map { Float($0) }
+            let poseYaw = try resolved.columns[12].optionalDouble().map { Float($0) }
+
             let boundingBox = CGRect(
                 x: boundingX,
                 y: boundingY,
                 width: boundingWidth,
                 height: boundingHeight
             )
-            
+
             detections.append(FaceDetection(
                 id: id,
                 assetID: assetID,
@@ -905,17 +933,21 @@ public final class FaceStore {
                 boundingBox: boundingBox,
                 confidence: Float(confidence),
                 faceEmbedding: faceEmbedding,
-                createdAt: createdAt
+                createdAt: createdAt,
+                faceQuality: faceQuality,
+                sharpness: sharpness,
+                poseYaw: poseYaw
             ))
         }
-        
+
         return detections
     }
 
     public func getFaceDetection(_ id: UUID, connection: Connection) throws -> FaceDetection? {
         let sql = """
         SELECT id, asset_id, person_id, bounding_x, bounding_y,
-               bounding_width, bounding_height, confidence, face_embedding::text, created_at
+               bounding_width, bounding_height, confidence, face_embedding::text, created_at,
+               face_quality, sharpness, pose_yaw
         FROM face_detections
         WHERE id = $1
         LIMIT 1;
@@ -948,6 +980,10 @@ public final class FaceStore {
                 faceEmbedding = nil
             }
 
+            let faceQuality = try resolved.columns[10].optionalDouble().map { Float($0) }
+            let sharpness = try resolved.columns[11].optionalDouble().map { Float($0) }
+            let poseYaw = try resolved.columns[12].optionalDouble().map { Float($0) }
+
             let boundingBox = CGRect(
                 x: boundingX,
                 y: boundingY,
@@ -962,7 +998,10 @@ public final class FaceStore {
                 boundingBox: boundingBox,
                 confidence: Float(confidence),
                 faceEmbedding: faceEmbedding,
-                createdAt: createdAt
+                createdAt: createdAt,
+                faceQuality: faceQuality,
+                sharpness: sharpness,
+                poseYaw: poseYaw
             )
         }
 
@@ -970,15 +1009,15 @@ public final class FaceStore {
     }
 
     /// Find k nearest face embeddings using pgvector's IVFFlat index
-    /// Returns person IDs and distances for voting-based clustering
-    public func findKNearestFaces(embedding: [Float], k: Int, connection: Connection) throws -> [(personID: UUID, distance: Float)] {
+    /// Returns person IDs, distances, and quality scores for weighted voting-based clustering
+    public func findKNearestFaces(embedding: [Float], k: Int, connection: Connection) throws -> [(personID: UUID, distance: Float, quality: Float?)] {
         let embeddingJson = try JSONSerialization.data(withJSONObject: embedding.map { Double($0) })
         guard let embeddingString = String(data: embeddingJson, encoding: .utf8) else {
             return []
         }
 
         let sql = """
-        SELECT person_id, face_embedding <=> $1::vector as distance
+        SELECT person_id, face_embedding <=> $1::vector as distance, face_quality
         FROM face_detections
         WHERE person_id IS NOT NULL AND face_embedding IS NOT NULL
         ORDER BY face_embedding <=> $1::vector
@@ -988,7 +1027,7 @@ public final class FaceStore {
         defer { statement.close() }
 
         let cursor = try statement.execute(parameterValues: [embeddingString, k])
-        var results: [(UUID, Float)] = []
+        var results: [(UUID, Float, Float?)] = []
 
         for row in cursor {
             let resolved = try row.get()
@@ -997,7 +1036,8 @@ public final class FaceStore {
                   let distance = try resolved.columns[1].optionalDouble() else {
                 continue
             }
-            results.append((personID, Float(distance)))
+            let quality = try resolved.columns[2].optionalDouble().map { Float($0) }
+            results.append((personID, Float(distance), quality))
         }
 
         return results
@@ -1142,6 +1182,193 @@ public final class FaceStore {
         let statement = try connection.prepareStatement(text: sql)
         defer { statement.close() }
         _ = try statement.execute(parameterValues: [eventID.uuidString])
+    }
+
+    public func getFacesWithoutQuality(connection: Connection, limit: Int? = nil) throws -> [FaceDetection] {
+        var sql = """
+        SELECT id, asset_id, person_id, bounding_x, bounding_y,
+               bounding_width, bounding_height, confidence, face_embedding::text, created_at,
+               use_high_threshold_clustering, face_quality, sharpness, pose_yaw
+        FROM face_detections
+        WHERE face_quality IS NULL
+        ORDER BY created_at DESC
+        """
+        if let limit = limit {
+            sql += " LIMIT \(limit)"
+        }
+        sql += ";"
+
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute()
+        var detections: [FaceDetection] = []
+
+        for row in cursor {
+            let resolved = try row.get()
+            guard let idString = try resolved.columns[0].optionalString(),
+                  let id = UUID(uuidString: idString),
+                  let assetID = try resolved.columns[1].optionalString(),
+                  let boundingX = try resolved.columns[3].optionalDouble(),
+                  let boundingY = try resolved.columns[4].optionalDouble(),
+                  let boundingWidth = try resolved.columns[5].optionalDouble(),
+                  let boundingHeight = try resolved.columns[6].optionalDouble(),
+                  let confidence = try resolved.columns[7].optionalDouble(),
+                  let createdAt = try resolved.columns[9].optionalTimestampWithTimeZone()?.date else {
+                continue
+            }
+
+            let personIDString = try resolved.columns[2].optionalString()
+            let personID = personIDString.flatMap(UUID.init)
+
+            let faceEmbedding: [Float]?
+            if let embeddingJson = try resolved.columns[8].optionalString(),
+               let embeddingData = embeddingJson.data(using: .utf8),
+               let embeddingArray = try JSONSerialization.jsonObject(with: embeddingData) as? [Double] {
+                faceEmbedding = embeddingArray.map { Float($0) }
+            } else {
+                faceEmbedding = nil
+            }
+
+            let useHighThresholdClustering = try resolved.columns[10].optionalBool() ?? false
+            let faceQuality = try resolved.columns[11].optionalDouble().map { Float($0) }
+            let sharpness = try resolved.columns[12].optionalDouble().map { Float($0) }
+            let poseYaw = try resolved.columns[13].optionalDouble().map { Float($0) }
+
+            let boundingBox = CGRect(
+                x: boundingX,
+                y: boundingY,
+                width: boundingWidth,
+                height: boundingHeight
+            )
+
+            detections.append(FaceDetection(
+                id: id,
+                assetID: assetID,
+                personID: personID,
+                boundingBox: boundingBox,
+                confidence: Float(confidence),
+                faceEmbedding: faceEmbedding,
+                useHighThresholdClustering: useHighThresholdClustering,
+                createdAt: createdAt,
+                faceQuality: faceQuality,
+                sharpness: sharpness,
+                poseYaw: poseYaw
+            ))
+        }
+
+        return detections
+    }
+
+    public func updateFaceQuality(_ detection: FaceDetection, connection: Connection) throws {
+        let sql = """
+        UPDATE face_detections
+        SET face_quality = $2, sharpness = $3, pose_yaw = $4
+        WHERE id = $1;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let params: [PostgresValueConvertible?] = [
+            detection.id.uuidString,
+            detection.faceQuality.map { Double($0) },
+            detection.sharpness.map { Double($0) },
+            detection.poseYaw.map { Double($0) }
+        ]
+        _ = try statement.execute(parameterValues: params)
+    }
+
+    public func getTotalFaceCount(connection: Connection) throws -> Int {
+        let sql = "SELECT COUNT(*) FROM face_detections;"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute()
+        for row in cursor {
+            let resolved = try row.get()
+            return try resolved.columns[0].optionalInt() ?? 0
+        }
+        return 0
+    }
+
+    public func getNamedPersonCount(connection: Connection) throws -> Int {
+        let sql = "SELECT COUNT(*) FROM persons WHERE name IS NOT NULL AND is_active = true;"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute()
+        for row in cursor {
+            let resolved = try row.get()
+            return try resolved.columns[0].optionalInt() ?? 0
+        }
+        return 0
+    }
+
+    public func deleteAllFaceDetections(connection: Connection) throws -> Int {
+        // First get count
+        let count = try getTotalFaceCount(connection: connection)
+
+        let sql = "DELETE FROM face_detections;"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute()
+
+        return count
+    }
+
+    public func clearAllProcessingStatus(connection: Connection) throws -> Int {
+        let countSQL = "SELECT COUNT(*) FROM face_detection_status;"
+        let countStatement = try connection.prepareStatement(text: countSQL)
+        defer { countStatement.close() }
+
+        var count = 0
+        let cursor = try countStatement.execute()
+        for row in cursor {
+            let resolved = try row.get()
+            count = try resolved.columns[0].optionalInt() ?? 0
+        }
+
+        let sql = "DELETE FROM face_detection_status;"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute()
+
+        return count
+    }
+
+    public func clearAllFavoriteFaces(connection: Connection) throws {
+        let sql = "UPDATE persons SET favorite_face_id = NULL WHERE favorite_face_id IS NOT NULL;"
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute()
+    }
+
+    public func clearAllAutoMergeEvents(connection: Connection) throws -> Int {
+        // First get count
+        let countSQL = "SELECT COUNT(*) FROM auto_merge_events;"
+        let countStatement = try connection.prepareStatement(text: countSQL)
+        defer { countStatement.close() }
+
+        var count = 0
+        let cursor = try countStatement.execute()
+        for row in cursor {
+            let resolved = try row.get()
+            count = try resolved.columns[0].optionalInt() ?? 0
+        }
+
+        // Delete faces from events first (child table)
+        let deleteFacesSQL = "DELETE FROM auto_merge_event_faces;"
+        let deleteFacesStatement = try connection.prepareStatement(text: deleteFacesSQL)
+        defer { deleteFacesStatement.close() }
+        _ = try deleteFacesStatement.execute()
+
+        // Then delete events
+        let deleteEventsSQL = "DELETE FROM auto_merge_events;"
+        let deleteEventsStatement = try connection.prepareStatement(text: deleteEventsSQL)
+        defer { deleteEventsStatement.close() }
+        _ = try deleteEventsStatement.execute()
+
+        return count
     }
 }
 

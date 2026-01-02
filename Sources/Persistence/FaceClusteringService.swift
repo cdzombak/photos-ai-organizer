@@ -59,13 +59,17 @@ public struct FaceClusteringService {
 
                 let blocked = try faceStore.blockedPersons(forFace: face.id, connection: connection)
 
-                // Use k-NN voting via pgvector index
+                // Same-photo constraint: faces in the same photo are different people
+                let facesInSamePhoto = try faceStore.getFaceDetectionsForAsset(face.assetID, connection: connection)
+                let personsInSamePhoto = Set(facesInSamePhoto.compactMap { $0.personID })
+
+                // Use k-NN voting via pgvector index (now returns quality for weighted voting)
                 let nearestNeighbors = try faceStore.findKNearestFaces(embedding: faceEmbedding, k: kNeighbors, connection: connection)
 
                 // Resolve merged person IDs to their final active person
                 let resolvedNeighbors = try nearestNeighbors.map { neighbor in
                     let finalPersonID = try faceStore.resolveMergeChain(neighbor.personID, connection: connection)
-                    return (personID: finalPersonID, distance: neighbor.distance)
+                    return (personID: finalPersonID, distance: neighbor.distance, quality: neighbor.quality)
                 }
 
                 // Use higher threshold for faces flagged for reprocessing (1.3x)
@@ -78,8 +82,9 @@ public struct FaceClusteringService {
                 let validNeighbors = resolvedNeighbors
                     .filter { $0.distance <= maxDistance }
                     .filter { !blocked.contains($0.personID) }
+                    .filter { !personsInSamePhoto.contains($0.personID) }  // Same-photo constraint
 
-                // Try voting first for robustness
+                // Try weighted voting first for robustness (uses quality scores)
                 var assignedPersonID = voteOnPerson(from: validNeighbors, votingThreshold: votingThreshold)
 
                 // If no voting consensus but we have valid neighbors, fall back to best match
@@ -117,8 +122,7 @@ public struct FaceClusteringService {
         for (index, person) in persons.enumerated() {
             reporter.advance(to: index + 1)
             let faces = try faceStore.getFacesForPerson(person.id, includeMergedDescendants: true, connection: connection)
-            let embeddings = faces.compactMap { $0.faceEmbedding }
-            guard let centroid = makeCentroid(from: embeddings) else { continue }
+            guard let centroid = makeCentroid(from: faces) else { continue }
             map[person.id] = centroid
         }
         reporter.finish()
@@ -145,8 +149,7 @@ public struct FaceClusteringService {
     ) throws {
         for personID in personIDs {
             let faces = try faceStore.getFacesForPerson(personID, includeMergedDescendants: true, connection: connection)
-            let embeddings = faces.compactMap { $0.faceEmbedding }
-            if let centroid = makeCentroid(from: embeddings) {
+            if let centroid = makeCentroid(from: faces) {
                 centroids[personID] = centroid
             } else {
                 centroids.removeValue(forKey: personID)
@@ -154,42 +157,104 @@ public struct FaceClusteringService {
         }
     }
 
-    private func makeCentroid(from embeddings: [[Float]]) -> PersonCentroid? {
-        guard let first = embeddings.first, !first.isEmpty else { return nil }
-        var sum = Array(repeating: Float(0), count: first.count)
-        var count = 0
-        for embedding in embeddings where embedding.count == first.count {
-            for index in sum.indices {
-                sum[index] += embedding[index]
-            }
-            count += 1
+    private func makeCentroid(from faces: [FaceDetection]) -> PersonCentroid? {
+        let validFaces = faces.filter { $0.faceEmbedding != nil }
+        guard let first = validFaces.first?.faceEmbedding, !first.isEmpty else { return nil }
+        let dimensions = first.count
+
+        // First pass: compute quality-weighted centroid
+        let initialCentroid = computeWeightedCentroid(from: validFaces, dimensions: dimensions)
+        guard !initialCentroid.isEmpty else { return nil }
+
+        // Second pass: reject outliers (similarity < 0.4 to initial centroid)
+        let outlierThreshold: Float = 0.4
+        let inliers = validFaces.filter { face in
+            guard let embedding = face.faceEmbedding else { return false }
+            let similarity = cosineSimilarity(embedding, initialCentroid)
+            return similarity >= outlierThreshold
         }
-        guard count > 0 else { return nil }
-        var average = sum
-        for index in average.indices {
-            average[index] /= Float(count)
+
+        // If we rejected too many (>50%), fall back to initial centroid
+        guard inliers.count >= validFaces.count / 2 else {
+            return PersonCentroid(vector: initialCentroid, count: validFaces.count)
         }
-        return PersonCentroid(vector: average, count: count)
+
+        // Recompute centroid with inliers only
+        let finalCentroid = computeWeightedCentroid(from: inliers, dimensions: dimensions)
+        guard !finalCentroid.isEmpty else {
+            return PersonCentroid(vector: initialCentroid, count: validFaces.count)
+        }
+
+        return PersonCentroid(vector: finalCentroid, count: inliers.count)
     }
 
-    /// Vote on person ID from k-NN results
-    /// Returns winning person ID if vote percentage exceeds threshold, nil otherwise
-    private func voteOnPerson(from neighbors: [(personID: UUID, distance: Float)], votingThreshold: Float = 0.4) -> UUID? {
-        guard !neighbors.isEmpty else { return nil }
+    private func computeWeightedCentroid(from faces: [FaceDetection], dimensions: Int) -> [Float] {
+        var weightedSum = Array(repeating: Float(0), count: dimensions)
+        var totalWeight: Float = 0
 
-        // Count votes per person ID
-        var voteCounts: [UUID: Int] = [:]
-        for (personID, _) in neighbors {
-            voteCounts[personID, default: 0] += 1
+        for face in faces {
+            guard let embedding = face.faceEmbedding, embedding.count == dimensions else { continue }
+            let quality = face.faceQuality ?? 0.5  // Default quality for faces without scores
+            let weight = quality
+
+            for i in 0..<dimensions {
+                weightedSum[i] += embedding[i] * weight
+            }
+            totalWeight += weight
         }
 
-        // Find person with most votes
-        guard let (winningPersonID, votes) = voteCounts.max(by: { $0.value < $1.value }) else {
+        guard totalWeight > 0 else { return [] }
+
+        return weightedSum.map { $0 / totalWeight }
+    }
+
+    private func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
+        guard a.count == b.count, !a.isEmpty else { return 0 }
+        var dot: Float = 0
+        var normA: Float = 0
+        var normB: Float = 0
+        for i in 0..<a.count {
+            dot += a[i] * b[i]
+            normA += a[i] * a[i]
+            normB += b[i] * b[i]
+        }
+        let denom = sqrt(normA) * sqrt(normB)
+        guard denom > 0 else { return 0 }
+        return dot / denom
+    }
+
+    /// Vote on person ID from k-NN results with quality-weighted votes
+    /// Higher quality faces have more influence on the vote
+    /// Returns winning person ID if weighted vote percentage exceeds threshold, nil otherwise
+    private func voteOnPerson(from neighbors: [(personID: UUID, distance: Float, quality: Float?)], votingThreshold: Float = 0.4) -> UUID? {
+        guard !neighbors.isEmpty else { return nil }
+
+        // Weighted votes per person ID
+        var weightedVotes: [UUID: Float] = [:]
+        var totalWeight: Float = 0
+
+        for (personID, distance, quality) in neighbors {
+            // Convert distance to similarity (cosine distance to similarity)
+            let similarity = 1.0 - distance
+
+            // Quality weight: use 0.5 for faces without quality, actual quality otherwise
+            let qualityWeight = quality ?? 0.5
+
+            // Combined weight: similarity * sqrt(quality) to dampen quality influence
+            let weight = similarity * sqrt(qualityWeight)
+
+            weightedVotes[personID, default: 0] += weight
+            totalWeight += weight
+        }
+
+        // Find person with highest weighted votes
+        guard let (winningPersonID, votes) = weightedVotes.max(by: { $0.value < $1.value }),
+              totalWeight > 0 else {
             return nil
         }
 
-        // Check if winning person has enough votes (percentage of k)
-        let votePercentage = Float(votes) / Float(neighbors.count)
+        // Check if winning person has enough relative weight
+        let votePercentage = votes / totalWeight
         return votePercentage >= votingThreshold ? winningPersonID : nil
     }
 
@@ -437,7 +502,7 @@ public struct FaceClusteringService {
         guard embeddings.count >= 2 else { return 1.0 }
 
         // Compute centroid once, then average similarity to centroid.
-        guard let centroid = makeCentroid(from: embeddings)?.vector else { return 0.0 }
+        guard let centroid = makeCentroid(from: faces)?.vector else { return 0.0 }
         var total: Float = 0
         var count = 0
         for embedding in embeddings {
@@ -468,11 +533,8 @@ public struct FaceClusteringService {
 
         // Compute centroids for both persons and compare those instead of all face pairs
         // This changes complexity from O(m1 × m2) to O(m1 + m2) per person pair
-        let embeddings1 = faces1.compactMap { $0.faceEmbedding }
-        let embeddings2 = faces2.compactMap { $0.faceEmbedding }
-
-        guard let centroid1 = makeCentroid(from: embeddings1),
-              let centroid2 = makeCentroid(from: embeddings2) else {
+        guard let centroid1 = makeCentroid(from: faces1),
+              let centroid2 = makeCentroid(from: faces2) else {
             return 0.0
         }
 

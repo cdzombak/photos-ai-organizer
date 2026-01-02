@@ -731,7 +731,7 @@ private extension PhotosMetadataExporterCLI {
         forwarded.append(contentsOf: arguments[arguments.index(after: index)..<arguments.endIndex])
         if commandName == FacePipelineSupport.detectCommandName {
             await DetectFacesCommand.main(forwarded)
-        } else {
+        } else if commandName == FacePipelineSupport.clusterCommandName {
             await ClusterFacesCommand.main(forwarded)
         }
         return true

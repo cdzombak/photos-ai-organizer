@@ -190,6 +190,24 @@ public extension MigrationStep {
             """
         ]
     )
+
+    static let addFaceQualityColumns = MigrationStep(
+        identifier: "011_add_face_quality",
+        statements: [
+            """
+            ALTER TABLE face_detections
+            ADD COLUMN IF NOT EXISTS face_quality FLOAT;
+            """,
+            """
+            ALTER TABLE face_detections
+            ADD COLUMN IF NOT EXISTS sharpness FLOAT;
+            """,
+            """
+            ALTER TABLE face_detections
+            ADD COLUMN IF NOT EXISTS pose_yaw FLOAT;
+            """
+        ]
+    )
 }
 
 protocol SQLCommandExecutor {

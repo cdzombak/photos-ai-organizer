@@ -60,7 +60,7 @@ swift run photos-ai-organizer import --config photos-config.yml
 #    - Optional tuning: face_detection.min_confidence, face_recognition.similarity_threshold (see photos-config.example.yml)
 swift run photos-ai-organizer detect-faces --config photos-config.yml --concurrency 8
 swift run photos-ai-organizer cluster-faces --config photos-config.yml
-#    - (Optional) Review/merge/split clusters in the browser:
+#    - Review/merge/split clusters in the browser; name important people:
 swift run photos-ai-organizer serve-faces --config photos-config.yml --port 8081
 
 # 1b) Detect "visit" windows with rare faces (optional, after clustering):
@@ -68,7 +68,7 @@ swift run photos-ai-organizer cluster-visits --config photos-config.yml
 swift run photos-ai-organizer sync-visit-albums --config photos-config.yml
 
 # 2) Run the travel pipeline and sync results to Photos app:
-swift run photos-ai-organizer run-travel-pipeline --config photos-config.yml --concurrency 10
+swift run photos-ai-organizer run-travel-pipeline --config photos-config.yml
 swift run photos-ai-organizer sync-travel-albums --config photos-config.yml
 
 # 3) Run the thematic pipeline and sync results to Photos app:
