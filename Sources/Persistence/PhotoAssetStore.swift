@@ -77,4 +77,29 @@ public final class PhotoAssetStore {
         }
         return ids
     }
+
+    public func assetIDsInDateRange(connection: Connection, windowStart: Date, windowEnd: Date) throws -> [String] {
+        let sql = """
+        SELECT asset_id
+        FROM \(config.tableName)
+        WHERE creation_date >= $1
+          AND creation_date < $2;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        let cursor = try statement.execute(parameterValues: [
+            PostgresTimestampWithTimeZone(date: windowStart),
+            PostgresTimestampWithTimeZone(date: windowEnd)
+        ])
+        var ids: [String] = []
+        for row in cursor {
+            let resolved = try row.get()
+            guard
+                let assetID = try resolved.columns[0].optionalString(),
+                !assetID.isEmpty
+            else { continue }
+            ids.append(assetID)
+        }
+        return ids
+    }
 }

@@ -34,6 +34,7 @@ struct ClusterVisitsCommand: AsyncParsableCommand {
 
         let faceStore = FaceStore(config: config)
         let visitStore = VisitClusterStore(config: config)
+        let photoStore = PhotoAssetStore(config: config)
 
         let allAppearances = try faceStore.fetchPersonAppearances(connection: connection)
         guard !allAppearances.isEmpty else {
@@ -78,16 +79,59 @@ struct ClusterVisitsCommand: AsyncParsableCommand {
             return
         }
 
+        // Enrich clusters with all photos in the date range
+        print("📸 Enriching clusters with all photos in date range...")
+        let enrichedClusters = try enrichClustersWithAllPhotos(clusters, photoStore: photoStore, connection: connection)
+
         try visitStore.ensureTablesExist(connection: connection)
-        try visitStore.persist(clusters, connection: connection)
+        try visitStore.persist(enrichedClusters, connection: connection)
 
         let formatter = ISO8601DateFormatter()
-        print("✅ Stored \(clusters.count) visit clusters:")
-        for cluster in clusters {
+        print("✅ Stored \(enrichedClusters.count) visit clusters:")
+        for cluster in enrichedClusters {
             let start = formatter.string(from: cluster.windowStart)
             let end = formatter.string(from: cluster.windowEnd)
             print("   - \(start) → \(end): \(cluster.rarePersonIDs.count) rare people, \(cluster.assetIDs.count) assets, score \(String(format: "%.2f", cluster.score))")
         }
+    }
+
+    private func enrichClustersWithAllPhotos(
+        _ clusters: [VisitCluster],
+        photoStore: PhotoAssetStore,
+        connection: Connection
+    ) throws -> [VisitCluster] {
+        var enriched: [VisitCluster] = []
+        var totalAdded = 0
+
+        for cluster in clusters {
+            let allAssetsInRange = try photoStore.assetIDsInDateRange(
+                connection: connection,
+                windowStart: cluster.windowStart,
+                windowEnd: cluster.windowEnd
+            )
+
+            var assetSet = Set(cluster.assetIDs)
+            let originalCount = assetSet.count
+
+            for assetID in allAssetsInRange where !assetID.isEmpty {
+                assetSet.insert(assetID)
+            }
+
+            let addedCount = assetSet.count - originalCount
+            totalAdded += addedCount
+
+            if addedCount > 0 {
+                enriched.append(cluster.withAssets(Array(assetSet)))
+            } else {
+                enriched.append(cluster)
+            }
+        }
+
+        if totalAdded > 0 {
+            print("   Added \(totalAdded) additional photos to visit clusters")
+        }
+
+        return enriched
     }
 }
 

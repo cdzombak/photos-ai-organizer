@@ -219,6 +219,20 @@ public struct VisitCluster: Sendable {
             albumRemovedAt: albumRemovedAt
         )
     }
+
+    public func withAssets(_ assetIDs: [String]) -> VisitCluster {
+        VisitCluster(
+            id: id,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            assetIDs: assetIDs,
+            personIDs: personIDs,
+            rarePersonIDs: rarePersonIDs,
+            score: score,
+            albumLocalID: albumLocalID,
+            albumRemovedAt: albumRemovedAt
+        )
+    }
 }
 
 public struct TravelWindow {
