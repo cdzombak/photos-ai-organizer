@@ -9,7 +9,8 @@
       "Bash(gh pr view:*)",
       "Bash(find:*)",
       "Bash(git restore:*)",
-      "Bash(wait)"
+      "Bash(wait)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []
