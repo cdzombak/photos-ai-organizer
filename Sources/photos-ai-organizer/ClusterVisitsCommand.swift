@@ -16,14 +16,10 @@ struct ClusterVisitsCommand: AsyncParsableCommand {
     @Option(name: [.short, .customLong("config"), .customLong("config-path")], help: "Path to configuration file")
     var configPath: String = "photos-config.yml"
 
-    @Option(name: .long, help: "Minimum face quality (0.0-1.0) to include in visit detection")
-    var minQuality: Float = 0.4
-
     init() {}
 
-    init(configPath: String, minQuality: Float = 0.4) {
+    init(configPath: String) {
         self.configPath = configPath
-        self.minQuality = minQuality
     }
 
     func run() async throws {
@@ -46,6 +42,7 @@ struct ClusterVisitsCommand: AsyncParsableCommand {
         }
 
         // Filter out low-quality face detections to reduce noise
+        let minQuality = config.visitClusteringMinFaceQuality ?? 0.4
         let appearances = allAppearances.filter { appearance in
             guard let quality = appearance.faceQuality else {
                 return true  // Include faces without quality scores (legacy data)
@@ -54,7 +51,7 @@ struct ClusterVisitsCommand: AsyncParsableCommand {
         }
         let filtered = allAppearances.count - appearances.count
 
-        print("Fetched \(allAppearances.count) face appearances (filtered \(filtered) low-quality); building rarity baselines...")
+        print("Fetched \(allAppearances.count) face appearances (filtered \(filtered) with quality < \(String(format: "%.2f", minQuality))); building rarity baselines...")
         let stats = VisitStatistics(appearances: appearances)
         let rarePersons = stats.rarePersons
         let householdPersons = stats.householdPersons
