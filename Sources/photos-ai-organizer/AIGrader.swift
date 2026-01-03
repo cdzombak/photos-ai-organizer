@@ -13,7 +13,7 @@ struct AIGrader: Sendable {
     func grade(imageData: Data) throws -> Int {
         let base64 = imageData.base64EncodedString()
         let systemPrompt = "You are an expert photo curator. Your response MUST be entirely valid JSON like {\"grade\":7} with an integer 0-10 grade, with no extra information."
-        let userText = "Consider composition, exposure, sharpness, artistry, and overall image quality. Score 0-10 (10 museum quality)."
+        let userText = "Consider composition, exposure, sharpness, artistry, and overall image quality. Score 0-10 (10 exceptional, 5 average, 0 unusable)."
 
         let payload = ChatCompletionRequest(
             model: config.model,
