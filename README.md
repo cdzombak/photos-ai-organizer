@@ -151,7 +151,6 @@ document a recommended AI thematic album workflow (pull into ai-organizer folder
 
 ### temporal superpipeline
 
-- ✅ consolidate clusters based on overlapping dates (via `cluster-temporal-albums`)
 - future: consider making temporal the only album sync point, deprecating individual travel/visit album sync
 
 ## License
