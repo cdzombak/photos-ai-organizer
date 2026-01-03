@@ -98,16 +98,22 @@ struct ClusterVisitsCommand: AsyncParsableCommand {
     private func enrichClustersWithAllPhotos(
         _ clusters: [VisitCluster],
         photoStore: PhotoAssetStore,
-        connection: Connection
+        connection: Connection,
+        bufferHours: Double = 2.0
     ) throws -> [VisitCluster] {
         var enriched: [VisitCluster] = []
         var totalAdded = 0
+        let bufferSeconds = bufferHours * 3600
 
         for cluster in clusters {
+            // Add a small buffer before/after to catch photos without detected faces
+            let queryStart = cluster.windowStart.addingTimeInterval(-bufferSeconds)
+            let queryEnd = cluster.windowEnd.addingTimeInterval(bufferSeconds)
+
             let allAssetsInRange = try photoStore.assetIDsInDateRange(
                 connection: connection,
-                windowStart: cluster.windowStart,
-                windowEnd: cluster.windowEnd
+                windowStart: queryStart,
+                windowEnd: queryEnd
             )
 
             var assetSet = Set(cluster.assetIDs)
@@ -248,9 +254,13 @@ private struct VisitWindowDetector {
                 householdCount: household.count
             )
             if rarePeople.count >= minRarePersons && subset.count >= minFaces && assetIDs.count >= minAssets {
+                // Use actual photo timestamps, not arbitrary window boundaries
+                let actualStart = subset.map(\.creationDate).min() ?? windowStart
+                let actualEnd = subset.map(\.creationDate).max() ?? windowEnd
+
                 let cluster = VisitCluster(
-                    windowStart: windowStart,
-                    windowEnd: windowEnd,
+                    windowStart: actualStart,
+                    windowEnd: actualEnd,
                     assetIDs: Array(assetIDs),
                     personIDs: Array(Set(people)),
                     rarePersonIDs: Array(rarePeople),
