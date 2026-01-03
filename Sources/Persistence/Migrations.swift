@@ -208,6 +208,29 @@ public extension MigrationStep {
             """
         ]
     )
+
+    static let createTemporalClusters = MigrationStep(
+        identifier: "012_create_temporal_clusters",
+        statements: [
+            """
+            CREATE TABLE IF NOT EXISTS temporal_clusters (
+                id UUID PRIMARY KEY,
+                window_start TIMESTAMPTZ NOT NULL,
+                window_end TIMESTAMPTZ NOT NULL,
+                asset_ids JSONB NOT NULL,
+                name TEXT NOT NULL,
+                source_travel_cluster_ids JSONB NOT NULL,
+                source_visit_cluster_ids JSONB NOT NULL,
+                album_local_id TEXT,
+                album_removed_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_temporal_clusters_window ON temporal_clusters(window_start, window_end);
+            """
+        ]
+    )
 }
 
 protocol SQLCommandExecutor {

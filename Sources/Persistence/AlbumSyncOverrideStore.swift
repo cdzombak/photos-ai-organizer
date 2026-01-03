@@ -6,6 +6,7 @@ public final class AlbumSyncOverrideStore {
         case travel
         case thematic
         case visits
+        case temporal
     }
 
     public enum Change: String {

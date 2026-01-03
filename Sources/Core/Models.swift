@@ -667,3 +667,65 @@ public struct FaceCluster {
         )
     }
 }
+
+public struct TemporalCluster: Sendable {
+    public let id: UUID
+    public let windowStart: Date
+    public let windowEnd: Date
+    public let assetIDs: [String]
+    public let name: String
+    public let sourceTravelClusterIDs: [String]
+    public let sourceVisitClusterIDs: [UUID]
+    public let albumLocalID: String?
+    public let albumRemovedAt: Date?
+
+    public init(
+        id: UUID = UUID(),
+        windowStart: Date,
+        windowEnd: Date,
+        assetIDs: [String],
+        name: String,
+        sourceTravelClusterIDs: [String],
+        sourceVisitClusterIDs: [UUID],
+        albumLocalID: String? = nil,
+        albumRemovedAt: Date? = nil
+    ) {
+        self.id = id
+        self.windowStart = windowStart
+        self.windowEnd = windowEnd
+        self.assetIDs = assetIDs
+        self.name = name
+        self.sourceTravelClusterIDs = sourceTravelClusterIDs
+        self.sourceVisitClusterIDs = sourceVisitClusterIDs
+        self.albumLocalID = albumLocalID
+        self.albumRemovedAt = albumRemovedAt
+    }
+
+    public func withID(_ id: UUID) -> TemporalCluster {
+        TemporalCluster(
+            id: id,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            assetIDs: assetIDs,
+            name: name,
+            sourceTravelClusterIDs: sourceTravelClusterIDs,
+            sourceVisitClusterIDs: sourceVisitClusterIDs,
+            albumLocalID: albumLocalID,
+            albumRemovedAt: albumRemovedAt
+        )
+    }
+
+    public func withAlbumLocalID(_ albumLocalID: String?) -> TemporalCluster {
+        TemporalCluster(
+            id: id,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            assetIDs: assetIDs,
+            name: name,
+            sourceTravelClusterIDs: sourceTravelClusterIDs,
+            sourceVisitClusterIDs: sourceVisitClusterIDs,
+            albumLocalID: albumLocalID,
+            albumRemovedAt: albumRemovedAt
+        )
+    }
+}

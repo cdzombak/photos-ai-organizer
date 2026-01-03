@@ -18,6 +18,10 @@ visit_albums:
   folder_name: Visits
   pattern: "Visit {people} {start} - {end}"
 
+temporal_albums:
+  folder_name: Events
+  pattern: "{name} {start} – {end}"
+
 thematic_folder: "Thematic Albums"
 thematic_albums:
   - name: "Autumn Colors"

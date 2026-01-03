@@ -17,6 +17,8 @@ Swift CLI that syncs Apple Photos metadata into PostgreSQL and analyzes it to or
 - `run-thematic-pipeline` – classify favorite/highly rated photos into configured thematic albums via AI (`--concurrency N`).
 - `cluster-visits` – identify 48h windows containing multiple rare, non-household faces.
 - `sync-visit-albums` – mirror visit clusters into Photos albums (preserves manual edits; see safety flags below).
+- `cluster-temporal-albums` – merge overlapping travel and visit clusters into unified "event" clusters.
+- `sync-temporal-albums` – mirror temporal clusters into Photos albums (`--restore-removals`, `--danger-remove`).
 - `sync-thematic-albums` – create/update thematic Photos albums based on AI classifications while respecting manual edits (`--restore-removals`, `--danger-remove`).
 
 Global flags: `--config <file>` (defaults to `photos-config.yml`), `--help`/`-h`.
@@ -42,6 +44,7 @@ Key sections:
 - `mapbox`: access token for travel geocoding (optional if you skip travel pipeline)
 - `travel_albums`: folder/name pattern for synced travel albums
 - `visit_albums`: optional folder/pattern for synced visit albums (defaults to folder "Visits", pattern "Visit {start} - {end}")
+- `temporal_albums`: optional folder/pattern for synced temporal albums (defaults to folder "Events", pattern "{name} {start} – {end}")
 - `thematic_albums`: list of objects with `name` and `description` describing each thematic album presented to the AI
 - `thematic_folder`: folder name where thematic albums are synced in Photos
 - `ai.grade`: `base_url`, `api_key`, `model` for the grading pipeline
@@ -70,6 +73,10 @@ swift run photos-ai-organizer sync-visit-albums --config photos-config.yml
 # 2) Run the travel pipeline and sync results to Photos app:
 swift run photos-ai-organizer run-travel-pipeline --config photos-config.yml
 swift run photos-ai-organizer sync-travel-albums --config photos-config.yml
+
+# 2b) Merge overlapping travel and visit clusters into temporal albums (optional):
+swift run photos-ai-organizer cluster-temporal-albums --config photos-config.yml
+swift run photos-ai-organizer sync-temporal-albums --config photos-config.yml
 
 # 3) Run the thematic pipeline and sync results to Photos app:
 swift run photos-ai-organizer grade --config photos-config.yml
@@ -110,6 +117,20 @@ Find 48-hour windows where you appear with people you don’t usually see.
 - **Heuristics:** Builds per-person baseline frequency, treats very common people as household, and considers infrequent people “rare.” Windows are 48h with a 12h stride/merge; a visit is kept when it has ≥2 rare people, ≥6 faces, and ≥3 assets. Score boosts for rare co-occurrence and downranks household-heavy windows.
 - **Output:** Writes clusters to `visit_clusters` (Postgres) with window start/end, involved assets, people, rare people, and a score for ordering. `sync-visit-albums` mirrors them into Photos under `visit_albums.folder_name` (default "Visits"), respecting the same safety flags as travel/thematic sync.
 
+## Temporal (Event) Pipeline
+
+Merge overlapping travel and visit clusters into unified "event" albums.
+
+- **Inputs:** Requires `run-travel-pipeline` and/or `cluster-visits` so source clusters exist.
+- **Commands:**
+  ```bash
+  swift run photos-ai-organizer cluster-temporal-albums --config photos-config.yml
+  swift run photos-ai-organizer sync-temporal-albums --config photos-config.yml
+  ```
+- **Merging Logic:** Travel and visit clusters whose time ranges overlap (even partially) are merged into a single temporal cluster. The merged cluster's window spans from the earliest start to the latest end of all overlapping source clusters.
+- **Naming:** If any travel clusters are involved, the name comes from the travel cluster with the most geotagged photos (using its location description or country name). Otherwise, names follow visit format ("Visit with {person1}, {person2}").
+- **Output:** Writes clusters to `temporal_clusters` (Postgres). `sync-temporal-albums` mirrors them into Photos under `temporal_albums.folder_name` (default "Events"), respecting `--restore-removals` and `--danger-remove` flags.
+
 ## Thematic Analysis Pipeline
 
 First, the `grade` pipeline asks an LLM to assign a numeric grade to each photo. This prevents including bad photos in your thematic albums. You can preview graded photos via the `serve-grades` command.
@@ -124,25 +145,14 @@ After running the pipeline, execute `sync-thematic-albums` to mirror positive ma
 
 document a recommended AI thematic album workflow (pull into ai-organizer folder, and then curate into your own albums). this works around the fact that AI isn't a great curator, but allows you to work from a more approachable set of photos for curation.
 
-### "visit" pipeline
-
-- should it include all the photos in the time window?
-
 ### travel pipeline (temporal)
 
 - future: only import non-geotagged photos _with faces_ if they include one of the faces from geotagged photos; remove unknown-face from existing albums
 
-### holiday pipeline (temporal)
-
-- works on user request only
-    - holiday name & date, birthday name & date
-- start with date of holiday +/- 2 days; birthday +/- 1 day
-- work outward from the actual date, merging face and travel clusters originating within the window
-
 ### temporal superpipeline
 
-- consolidate clusters based on overlapping dates, preferring "holiday" as the primary theme, then "trip", then "visit"
-- create albums (eventually this is the only spot that'll do this)
+- ✅ consolidate clusters based on overlapping dates (via `cluster-temporal-albums`)
+- future: consider making temporal the only album sync point, deprecating individual travel/visit album sync
 
 ## License
 
