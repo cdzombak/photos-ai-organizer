@@ -420,7 +420,7 @@ public final class FaceStore {
     
     public func getPerson(_ personID: UUID, connection: Connection) throws -> Person? {
         let sql = """
-        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored, album_local_id, album_removed_at
         FROM persons
         WHERE id = $1;
         """
@@ -447,6 +447,8 @@ public final class FaceStore {
             let favoriteFaceID = favoriteFaceIDString != nil ? UUID(uuidString: favoriteFaceIDString!) : nil
             let needsReprocessing = try resolved.columns[9].optionalBool() ?? false
             let isIgnored = try resolved.columns[10].optionalBool() ?? false
+            let albumLocalID = try resolved.columns[11].optionalString()
+            let albumRemovedAt = try resolved.columns[12].optionalTimestampWithTimeZone()?.date
 
             return Person(
                 id: id,
@@ -459,7 +461,9 @@ public final class FaceStore {
                 mergedByAuto: mergedByAuto,
                 favoriteFaceID: favoriteFaceID,
                 needsReprocessing: needsReprocessing,
-                isIgnored: isIgnored
+                isIgnored: isIgnored,
+                albumLocalID: albumLocalID,
+                albumRemovedAt: albumRemovedAt
             )
         }
 
@@ -580,7 +584,7 @@ public final class FaceStore {
     
     public func getAllActivePersons(connection: Connection) throws -> [Person] {
         let sql = """
-        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored, album_local_id, album_removed_at
         FROM persons
         WHERE is_active = true AND is_ignored = false
         ORDER BY created_at ASC;
@@ -611,6 +615,8 @@ public final class FaceStore {
             let favoriteFaceID = favoriteFaceIDString != nil ? UUID(uuidString: favoriteFaceIDString!) : nil
             let needsReprocessing = try resolved.columns[9].optionalBool() ?? false
             let isIgnored = try resolved.columns[10].optionalBool() ?? false
+            let albumLocalID = try resolved.columns[11].optionalString()
+            let albumRemovedAt = try resolved.columns[12].optionalTimestampWithTimeZone()?.date
 
             persons.append(Person(
                 id: id,
@@ -623,7 +629,9 @@ public final class FaceStore {
                 mergedByAuto: mergedByAuto,
                 favoriteFaceID: favoriteFaceID,
                 needsReprocessing: needsReprocessing,
-                isIgnored: isIgnored
+                isIgnored: isIgnored,
+                albumLocalID: albumLocalID,
+                albumRemovedAt: albumRemovedAt
             ))
         }
 
@@ -720,7 +728,7 @@ public final class FaceStore {
 
     public func getPersonsFlaggedForReprocessing(connection: Connection) throws -> [Person] {
         let sql = """
-        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored, album_local_id, album_removed_at
         FROM persons
         WHERE needs_reprocessing = true AND is_active = true
         ORDER BY created_at ASC;
@@ -750,6 +758,8 @@ public final class FaceStore {
             let favoriteFaceID = favoriteFaceIDString != nil ? UUID(uuidString: favoriteFaceIDString!) : nil
             let needsReprocessing = try resolved.columns[9].optionalBool() ?? false
             let isIgnored = try resolved.columns[10].optionalBool() ?? false
+            let albumLocalID = try resolved.columns[11].optionalString()
+            let albumRemovedAt = try resolved.columns[12].optionalTimestampWithTimeZone()?.date
 
             persons.append(Person(
                 id: id,
@@ -762,7 +772,9 @@ public final class FaceStore {
                 mergedByAuto: mergedByAuto,
                 favoriteFaceID: favoriteFaceID,
                 needsReprocessing: needsReprocessing,
-                isIgnored: isIgnored
+                isIgnored: isIgnored,
+                albumLocalID: albumLocalID,
+                albumRemovedAt: albumRemovedAt
             ))
         }
 
@@ -1373,6 +1385,147 @@ public final class FaceStore {
         _ = try deleteEventsStatement.execute()
 
         return count
+    }
+
+    // MARK: - Face Album Sync
+
+    public func ensureFaceAlbumColumnsExist(connection: Connection) throws {
+        let alterStatements = [
+            "ALTER TABLE persons ADD COLUMN IF NOT EXISTS album_local_id TEXT;",
+            "ALTER TABLE persons ADD COLUMN IF NOT EXISTS album_removed_at TIMESTAMPTZ;"
+        ]
+        for sql in alterStatements {
+            let statement = try connection.prepareStatement(text: sql)
+            defer { statement.close() }
+            _ = try statement.execute()
+        }
+    }
+
+    public func getNamedPersonsForAlbumSync(connection: Connection) throws -> [Person] {
+        let sql = """
+        SELECT id, name, created_at, updated_at, merged_into, is_active, cluster_quality, merged_by_auto, favorite_face_id, needs_reprocessing, is_ignored, album_local_id, album_removed_at
+        FROM persons
+        WHERE is_active = true
+          AND is_ignored = false
+          AND name IS NOT NULL
+          AND trim(name) <> ''
+        ORDER BY name ASC;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute()
+        var persons: [Person] = []
+
+        for row in cursor {
+            let resolved = try row.get()
+            guard let idString = try resolved.columns[0].optionalString(),
+                  let id = UUID(uuidString: idString),
+                  let createdAt = try resolved.columns[2].optionalTimestampWithTimeZone()?.date,
+                  let updatedAt = try resolved.columns[3].optionalTimestampWithTimeZone()?.date,
+                  let isActive = try resolved.columns[5].optionalBool() else {
+                continue
+            }
+
+            let name = try resolved.columns[1].optionalString()
+            let mergedIntoString = try resolved.columns[4].optionalString()
+            let mergedInto = mergedIntoString != nil ? UUID(uuidString: mergedIntoString!) : nil
+            let quality = try resolved.columns[6].optionalDouble().map(Float.init)
+            let mergedByAuto = try resolved.columns[7].optionalBool() ?? false
+            let favoriteFaceIDString = try resolved.columns[8].optionalString()
+            let favoriteFaceID = favoriteFaceIDString != nil ? UUID(uuidString: favoriteFaceIDString!) : nil
+            let needsReprocessing = try resolved.columns[9].optionalBool() ?? false
+            let isIgnored = try resolved.columns[10].optionalBool() ?? false
+            let albumLocalID = try resolved.columns[11].optionalString()
+            let albumRemovedAt = try resolved.columns[12].optionalTimestampWithTimeZone()?.date
+
+            persons.append(Person(
+                id: id,
+                name: name,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                mergedInto: mergedInto,
+                isActive: isActive,
+                clusterQuality: quality,
+                mergedByAuto: mergedByAuto,
+                favoriteFaceID: favoriteFaceID,
+                needsReprocessing: needsReprocessing,
+                isIgnored: isIgnored,
+                albumLocalID: albumLocalID,
+                albumRemovedAt: albumRemovedAt
+            ))
+        }
+
+        return persons
+    }
+
+    public func updateAlbumIdentifier(_ albumLocalID: String?, for personID: UUID, connection: Connection) throws {
+        let sql = """
+        UPDATE persons
+        SET album_local_id = $1, updated_at = $2
+        WHERE id = $3;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute(parameterValues: [
+            albumLocalID,
+            PostgresTimestampWithTimeZone(date: Date()),
+            personID.uuidString
+        ])
+    }
+
+    public func updateAlbumRemovalDate(_ date: Date?, for personID: UUID, connection: Connection) throws {
+        let sql = """
+        UPDATE persons
+        SET album_removed_at = $1, updated_at = $2
+        WHERE id = $3;
+        """
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+        _ = try statement.execute(parameterValues: [
+            date.map { PostgresTimestampWithTimeZone(date: $0) },
+            PostgresTimestampWithTimeZone(date: Date()),
+            personID.uuidString
+        ])
+    }
+
+    public func getAssetIDsForPerson(_ personID: UUID, includeMergedDescendants: Bool = true, connection: Connection) throws -> [String] {
+        let sql: String
+        if includeMergedDescendants {
+            sql = """
+            WITH RECURSIVE person_tree AS (
+                SELECT id FROM persons WHERE id = $1
+                UNION ALL
+                SELECT p.id FROM persons p
+                JOIN person_tree pt ON p.merged_into = pt.id
+            )
+            SELECT DISTINCT fd.asset_id
+            FROM face_detections fd
+            WHERE fd.person_id IN (SELECT id FROM person_tree)
+            ORDER BY fd.asset_id;
+            """
+        } else {
+            sql = """
+            SELECT DISTINCT asset_id
+            FROM face_detections
+            WHERE person_id = $1
+            ORDER BY asset_id;
+            """
+        }
+        let statement = try connection.prepareStatement(text: sql)
+        defer { statement.close() }
+
+        let cursor = try statement.execute(parameterValues: [personID.uuidString])
+        var assetIDs: [String] = []
+
+        for row in cursor {
+            let resolved = try row.get()
+            if let assetID = try resolved.columns[0].optionalString() {
+                assetIDs.append(assetID)
+            }
+        }
+
+        return assetIDs
     }
 }
 

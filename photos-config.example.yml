@@ -22,6 +22,9 @@ temporal_albums:
   folder_name: Events
   pattern: "{name} {start} – {end}"
 
+face_albums:
+  folder_name: People
+
 thematic_folder: "Thematic Albums"
 thematic_albums:
   - name: "Autumn Colors"

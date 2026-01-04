@@ -25,6 +25,7 @@ enum CLICommand: String {
     case syncTemporalAlbums = "sync-temporal-albums"
     case runThematicPipeline = "run-thematic-pipeline"
     case syncThematicAlbums = "sync-thematic-albums"
+    case syncFaceAlbums = "sync-face-albums"
     case grade = "grade"
     case serveGrades = "serve-grades"
     case serveFaces = "serve-faces"
@@ -98,16 +99,16 @@ struct CLIOptions {
                 guard let currentCommand = command else {
                     throw ExportError.invalidArgument("Specify a subcommand before --restore-removals")
                 }
-                guard currentCommand == .syncTravelAlbums || currentCommand == .syncThematicAlbums || currentCommand == .syncVisitAlbums || currentCommand == .syncTemporalAlbums else {
-                    throw ExportError.invalidArgument("--restore-removals can only be used with 'sync-travel-albums', 'sync-visit-albums', 'sync-temporal-albums', or 'sync-thematic-albums'")
+                guard currentCommand == .syncTravelAlbums || currentCommand == .syncThematicAlbums || currentCommand == .syncVisitAlbums || currentCommand == .syncTemporalAlbums || currentCommand == .syncFaceAlbums else {
+                    throw ExportError.invalidArgument("--restore-removals can only be used with 'sync-travel-albums', 'sync-visit-albums', 'sync-temporal-albums', 'sync-thematic-albums', or 'sync-face-albums'")
                 }
                 restoreRemovals = true
             case "--danger-remove":
                 guard let currentCommand = command else {
                     throw ExportError.invalidArgument("Specify a subcommand before --danger-remove")
                 }
-                guard currentCommand == .syncTravelAlbums || currentCommand == .syncThematicAlbums || currentCommand == .syncVisitAlbums || currentCommand == .syncTemporalAlbums else {
-                    throw ExportError.invalidArgument("--danger-remove can only be used with 'sync-travel-albums', 'sync-visit-albums', 'sync-temporal-albums', or 'sync-thematic-albums'")
+                guard currentCommand == .syncTravelAlbums || currentCommand == .syncThematicAlbums || currentCommand == .syncVisitAlbums || currentCommand == .syncTemporalAlbums || currentCommand == .syncFaceAlbums else {
+                    throw ExportError.invalidArgument("--danger-remove can only be used with 'sync-travel-albums', 'sync-visit-albums', 'sync-temporal-albums', 'sync-thematic-albums', or 'sync-face-albums'")
                 }
                 dangerRemove = true
             case "--port":
@@ -693,6 +694,14 @@ struct PhotosMetadataExporterCLI {
                 )
                 let summary = try syncer.run()
                 print(summary)
+            case .syncFaceAlbums:
+                let syncer = FaceAlbumSynchronizer(
+                    config: config,
+                    restoreRemovals: options.restoreRemovals,
+                    dangerRemove: options.dangerRemove
+                )
+                let summary = try syncer.run()
+                print(summary)
             case .grade:
                 let grader = PhotoGradeCommand(config: config)
                 let summary = try grader.run(concurrency: options.gradeConcurrency ?? 10)
@@ -768,6 +777,7 @@ SUBCOMMANDS:
   sync-temporal-albums     Mirror temporal clusters into Photos albums. (--restore-removals, --danger-remove)
   run-thematic-pipeline Apply thematic albums via AI classifications. (--concurrency N)
   sync-thematic-albums  Create/update thematic albums in Photos. (--restore-removals, --danger-remove)
+  sync-face-albums     Create/update albums for each named person. (--restore-removals, --danger-remove)
   grade                Send Photos to an AI model for 0–10 quality grading. (--concurrency N)
   serve-grades         Run a simple web server previewing graded photos.
   serve-faces          Review detected persons and clusters in a browser.
@@ -788,6 +798,7 @@ EXAMPLES:
   photos-ai-organizer sync-travel-albums --config travel.yml
   photos-ai-organizer run-thematic-pipeline --config photos-config.yml
   photos-ai-organizer sync-thematic-albums --config photos-config.yml
+  photos-ai-organizer sync-face-albums --config photos-config.yml
   photos-ai-organizer \(FacePipelineSupport.detectCommandName) --config photos-config.yml
   photos-ai-organizer serve-faces --config photos-config.yml --port 8090
 """

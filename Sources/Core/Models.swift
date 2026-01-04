@@ -348,6 +348,8 @@ public struct Person {
     public var favoriteFaceID: UUID?
     public var needsReprocessing: Bool
     public var isIgnored: Bool
+    public var albumLocalID: String?
+    public var albumRemovedAt: Date?
 
     public init(
         id: UUID = UUID(),
@@ -360,7 +362,9 @@ public struct Person {
         mergedByAuto: Bool = false,
         favoriteFaceID: UUID? = nil,
         needsReprocessing: Bool = false,
-        isIgnored: Bool = false
+        isIgnored: Bool = false,
+        albumLocalID: String? = nil,
+        albumRemovedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
@@ -373,6 +377,8 @@ public struct Person {
         self.favoriteFaceID = favoriteFaceID
         self.needsReprocessing = needsReprocessing
         self.isIgnored = isIgnored
+        self.albumLocalID = albumLocalID
+        self.albumRemovedAt = albumRemovedAt
     }
 
     public func withName(_ name: String?) -> Person {
@@ -387,7 +393,9 @@ public struct Person {
             mergedByAuto: mergedByAuto,
             favoriteFaceID: favoriteFaceID,
             needsReprocessing: needsReprocessing,
-            isIgnored: isIgnored
+            isIgnored: isIgnored,
+            albumLocalID: albumLocalID,
+            albumRemovedAt: albumRemovedAt
         )
     }
 
@@ -403,7 +411,9 @@ public struct Person {
             mergedByAuto: mergedByAuto,
             favoriteFaceID: favoriteFaceID,
             needsReprocessing: needsReprocessing,
-            isIgnored: isIgnored
+            isIgnored: isIgnored,
+            albumLocalID: albumLocalID,
+            albumRemovedAt: albumRemovedAt
         )
     }
 
@@ -419,7 +429,9 @@ public struct Person {
             mergedByAuto: mergedByAuto,
             favoriteFaceID: favoriteFaceID,
             needsReprocessing: needsReprocessing,
-            isIgnored: isIgnored
+            isIgnored: isIgnored,
+            albumLocalID: albumLocalID,
+            albumRemovedAt: albumRemovedAt
         )
     }
 
@@ -435,7 +447,9 @@ public struct Person {
             mergedByAuto: mergedByAuto,
             favoriteFaceID: favoriteFaceID,
             needsReprocessing: needsReprocessing,
-            isIgnored: isIgnored
+            isIgnored: isIgnored,
+            albumLocalID: albumLocalID,
+            albumRemovedAt: albumRemovedAt
         )
     }
 
@@ -451,7 +465,9 @@ public struct Person {
             mergedByAuto: mergedByAuto,
             favoriteFaceID: favoriteFaceID,
             needsReprocessing: needsReprocessing,
-            isIgnored: isIgnored
+            isIgnored: isIgnored,
+            albumLocalID: albumLocalID,
+            albumRemovedAt: albumRemovedAt
         )
     }
 
@@ -467,7 +483,9 @@ public struct Person {
             mergedByAuto: mergedByAuto,
             favoriteFaceID: favoriteFaceID,
             needsReprocessing: needsReprocessing,
-            isIgnored: isIgnored
+            isIgnored: isIgnored,
+            albumLocalID: albumLocalID,
+            albumRemovedAt: albumRemovedAt
         )
     }
 
@@ -483,7 +501,9 @@ public struct Person {
             mergedByAuto: mergedByAuto,
             favoriteFaceID: favoriteFaceID,
             needsReprocessing: needsReprocessing,
-            isIgnored: isIgnored
+            isIgnored: isIgnored,
+            albumLocalID: albumLocalID,
+            albumRemovedAt: albumRemovedAt
         )
     }
 }

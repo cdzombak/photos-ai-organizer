@@ -14,6 +14,7 @@ Swift CLI that syncs Apple Photos metadata into PostgreSQL and analyzes it to or
 - `detect-faces` – run Vision + FaceNet detection, storing bounding boxes and embeddings in Postgres.
 - `cluster-faces` – build person clusters from stored face embeddings; safe to rerun as you iterate.
 - `serve-faces` – browse/merge/split detected persons and faces in a web UI (default port 8081; override with `--port`).
+- `sync-face-albums` – create/update Photos albums for each named person (`--restore-removals`, `--danger-remove`).
 - `run-thematic-pipeline` – classify favorite/highly rated photos into configured thematic albums via AI (`--concurrency N`).
 - `cluster-visits` – identify 48h windows containing multiple rare, non-household faces.
 - `sync-visit-albums` – mirror visit clusters into Photos albums (preserves manual edits; see safety flags below).
@@ -45,6 +46,7 @@ Key sections:
 - `travel_albums`: folder/name pattern for synced travel albums
 - `visit_albums`: optional folder/pattern for synced visit albums (defaults to folder "Visits", pattern "Visit {start} - {end}")
 - `temporal_albums`: optional folder/pattern for synced temporal albums (defaults to folder "Events", pattern "{name} {start} – {end}")
+- `face_albums`: optional `folder_name` for person albums (defaults to "People")
 - `thematic_albums`: list of objects with `name` and `description` describing each thematic album presented to the AI
 - `thematic_folder`: folder name where thematic albums are synced in Photos
 - `ai.grade`: `base_url`, `api_key`, `model` for the grading pipeline
@@ -65,6 +67,8 @@ swift run photos-ai-organizer detect-faces --config photos-config.yml --concurre
 swift run photos-ai-organizer cluster-faces --config photos-config.yml
 #    - Review/merge/split clusters in the browser; name important people:
 swift run photos-ai-organizer serve-faces --config photos-config.yml --port 8081
+#    - Create albums for each named person:
+swift run photos-ai-organizer sync-face-albums --config photos-config.yml
 
 # 1b) Detect "visit" windows with rare faces (optional, after clustering):
 swift run photos-ai-organizer cluster-visits --config photos-config.yml
@@ -107,6 +111,7 @@ The face pipeline detects faces using Vision, generates embeddings with FaceNet,
 - **Detect:** `swift run photos-ai-organizer detect-faces --config photos-config.yml --concurrency 8` to write detections + embeddings into Postgres. Tune thresholds via `face_detection.min_confidence` in your config.
 - **Cluster:** `swift run photos-ai-organizer cluster-faces --config photos-config.yml` to group faces into people using `face_recognition.similarity_threshold`. Safe to rerun after adjusting thresholds or merging/splitting persons.
 - **Review:** `swift run photos-ai-organizer serve-faces --config photos-config.yml --port 8081` opens a browser UI to browse persons, mark a favorite face, merge suggestions, and flag clusters for reprocessing. Restart `cluster-faces` after adjustments to apply them.
+- **Sync Albums:** `swift run photos-ai-organizer sync-face-albums --config photos-config.yml` creates a Photos album for each named person, containing all photos where that person appears. Albums are created in the folder specified by `face_albums.folder_name` (defaults to "People"). The sync respects manual edits; use `--restore-removals` to recreate deleted albums or re-add removed photos, and `--danger-remove` to remove manually added photos that don't belong.
 
 ## Visit (Face-Based) Pipeline
 

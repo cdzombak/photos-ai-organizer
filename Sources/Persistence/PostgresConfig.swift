@@ -21,6 +21,7 @@ public struct PostgresConfig {
     public let temporalAlbumNamePattern: String?
     public let thematicAlbums: [ThematicAlbum]?
     public let thematicFolderName: String?
+    public let faceAlbumFolderName: String?
     public let gradingAI: AIConfig?
     public let thematicAI: AIConfig?
     public let faceDetectionMinConfidence: Float?
@@ -102,6 +103,7 @@ public struct PostgresConfig {
             temporalAlbumNamePattern: rawConfig.temporalAlbums?.pattern ?? "{name} {start} – {end}",
             thematicAlbums: rawConfig.thematicAlbums,
             thematicFolderName: rawConfig.thematicFolder ?? "Thematic Albums",
+            faceAlbumFolderName: rawConfig.faceAlbums?.folderName ?? "People",
             gradingAI: rawConfig.ai?.grade,
             thematicAI: rawConfig.ai?.thematic ?? rawConfig.ai?.grade,
             faceDetectionMinConfidence: rawConfig.faceDetection?.minConfidence,
@@ -178,6 +180,7 @@ public struct PostgresConfig {
         public let temporalAlbums: AlbumConfig?
         public let thematicAlbums: [ThematicAlbum]?
         public let thematicFolder: String?
+        public let faceAlbums: AlbumConfig?
         public let ai: AISection?
         public let faceDetection: FaceDetectionConfig?
         public let faceRecognition: FaceRecognitionConfig?
@@ -191,6 +194,7 @@ public struct PostgresConfig {
             case temporalAlbums = "temporal_albums"
             case thematicAlbums = "thematic_albums"
             case thematicFolder = "thematic_folder"
+            case faceAlbums = "face_albums"
             case ai
             case faceDetection = "face_detection"
             case faceRecognition = "face_recognition"
